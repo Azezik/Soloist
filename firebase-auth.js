@@ -366,7 +366,9 @@ async function renderDashboard() {
           if (item.type === "lead") {
             const stageLabel = getStageById(pipelineSettings, item.stageId)?.label || "Unknown stage";
             return `
-              <article class="panel feed-item">
+              <article class="panel feed-item${item.contactId ? " feed-item-clickable" : ""}" ${
+                item.contactId ? `data-open-contact-card="true" data-contact-id="${item.contactId}" tabindex="0" role="button"` : ""
+              }>
                 <p class="feed-type">Lead</p>
                 <h3>${item.title}</h3>
                 <p>${item.subtitle}</p>
@@ -375,18 +377,15 @@ async function renderDashboard() {
                 <div class="button-row">
                   <button type="button" data-lead-action="done" data-lead-source="${item.source}" data-lead-id="${item.id}">Done</button>
                   <button type="button" class="secondary-btn" data-lead-action="push" data-lead-source="${item.source}" data-lead-id="${item.id}">Push</button>
-                  ${
-                    item.contactId
-                      ? `<button type="button" class="secondary-btn" data-open-contact="true" data-contact-id="${item.contactId}">Open</button>`
-                      : ""
-                  }
                 </div>
               </article>
             `;
           }
 
           return `
-            <article class="panel feed-item">
+            <article class="panel feed-item${item.contactId ? " feed-item-clickable" : ""}" ${
+              item.contactId ? `data-open-contact-card="true" data-contact-id="${item.contactId}" tabindex="0" role="button"` : ""
+            }>
               <p class="feed-type">Task</p>
               <h3>${item.title}</h3>
               <p>${item.subtitle}</p>
@@ -394,11 +393,6 @@ async function renderDashboard() {
               ${item.notes ? `<p>${item.notes}</p>` : ""}
               <div class="button-row">
                 <button type="button" data-task-action="complete" data-task-id="${item.id}">Complete</button>
-                ${
-                  item.contactId
-                    ? `<button type="button" class="secondary-btn" data-open-contact="true" data-contact-id="${item.contactId}">Open</button>`
-                    : ""
-                }
               </div>
             </article>
           `;
@@ -410,7 +404,10 @@ async function renderDashboard() {
     <section>
       <div class="view-header">
         <h2>Dashboard Feed</h2>
-        <button id="new-lead-btn" type="button">New Lead +</button>
+        <div class="view-header-actions">
+          <button id="new-lead-btn" type="button">New Lead +</button>
+          <button id="add-task-btn" type="button">Add Task</button>
+        </div>
       </div>
       <div class="feed-list">${feedMarkup}</div>
     </section>
@@ -420,9 +417,24 @@ async function renderDashboard() {
     window.location.hash = "#add-lead";
   });
 
-  viewContainer.querySelectorAll('[data-open-contact="true"]').forEach((itemEl) => {
-    itemEl.addEventListener("click", () => {
+  document.getElementById("add-task-btn")?.addEventListener("click", () => {
+    window.location.hash = "#tasks/new";
+  });
+
+  viewContainer.querySelectorAll('[data-open-contact-card="true"]').forEach((itemEl) => {
+    const navigateToContact = () => {
       window.location.hash = `#contact/${itemEl.dataset.contactId}`;
+    };
+
+    itemEl.addEventListener("click", (event) => {
+      if (event.target.closest("button")) return;
+      navigateToContact();
+    });
+
+    itemEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      navigateToContact();
     });
   });
 
