@@ -61,10 +61,35 @@ const DEFAULT_PIPELINE_SETTINGS = {
   ],
 };
 
+const DEFAULT_PUSH_PRESETS = [
+  { label: "+1 hour", behavior: { type: "addHours", hours: 1 } },
+  { label: "+3 hours", behavior: { type: "addHours", hours: 3 } },
+  { label: "Next 12:00 (noon)", behavior: { type: "nextTime", time: "12:00" } },
+  { label: "Next 16:00 (4:00 PM)", behavior: { type: "nextTime", time: "16:00" } },
+  {
+    label: "Next Monday 08:30",
+    behavior: { type: "nextWeekdayTime", weekday: 1, time: "08:30" },
+  },
+];
+
+function cloneDefaultPushPresets() {
+  return DEFAULT_PUSH_PRESETS.map((preset) => ({
+    label: preset.label,
+    behavior: { ...preset.behavior },
+  }));
+}
+
 function cloneDefaultPipelineSettings() {
   return {
     dayStartTime: DEFAULT_PIPELINE_SETTINGS.dayStartTime,
     stages: DEFAULT_PIPELINE_SETTINGS.stages.map((stage) => ({ ...stage })),
+  };
+}
+
+function cloneDefaultAppSettings() {
+  return {
+    pipeline: cloneDefaultPipelineSettings(),
+    pushPresets: cloneDefaultPushPresets(),
   };
 }
 
@@ -108,6 +133,53 @@ function normalizePipelineSettings(input) {
   };
 }
 
+function normalizePushPresetBehavior(inputBehavior, fallbackBehavior) {
+  const type = String(inputBehavior?.type || fallbackBehavior.type);
+
+  if (type === "addHours") {
+    const parsedHours = Number.parseInt(inputBehavior?.hours, 10);
+    return {
+      type,
+      hours: Number.isNaN(parsedHours) || parsedHours < 1 ? fallbackBehavior.hours : parsedHours,
+    };
+  }
+
+  if (type === "nextWeekdayTime") {
+    const parsedWeekday = Number.parseInt(inputBehavior?.weekday, 10);
+    return {
+      type,
+      weekday: Number.isNaN(parsedWeekday) || parsedWeekday < 0 || parsedWeekday > 6 ? fallbackBehavior.weekday : parsedWeekday,
+      time: sanitizeTimeString(inputBehavior?.time || fallbackBehavior.time),
+    };
+  }
+
+  return {
+    type: "nextTime",
+    time: sanitizeTimeString(inputBehavior?.time || fallbackBehavior.time),
+  };
+}
+
+function normalizePushPresets(inputPresets) {
+  const fallback = cloneDefaultPushPresets();
+  const source = Array.isArray(inputPresets) ? inputPresets : [];
+
+  return fallback.map((fallbackPreset, index) => {
+    const incoming = source[index] || {};
+    return {
+      label: String(incoming.label || fallbackPreset.label),
+      behavior: normalizePushPresetBehavior(incoming.behavior, fallbackPreset.behavior),
+    };
+  });
+}
+
+function normalizeAppSettings(input) {
+  const pipelineSource = input?.pipeline || input;
+  return {
+    pipeline: normalizePipelineSettings(pipelineSource),
+    pushPresets: normalizePushPresets(input?.pushPresets),
+  };
+}
+
 function pipelineSettingsRef(uid) {
   return doc(db, "users", uid, "settings", "pipeline");
 }
@@ -117,12 +189,26 @@ async function getPipelineSettings(uid) {
   const settingsSnapshot = await getDoc(settingsRef);
 
   if (!settingsSnapshot.exists()) {
-    const defaults = cloneDefaultPipelineSettings();
+    const defaults = cloneDefaultAppSettings();
+    await setDoc(settingsRef, defaults);
+    return defaults.pipeline;
+  }
+
+  const appSettings = normalizeAppSettings(settingsSnapshot.data());
+  return appSettings.pipeline;
+}
+
+async function getAppSettings(uid) {
+  const settingsRef = pipelineSettingsRef(uid);
+  const settingsSnapshot = await getDoc(settingsRef);
+
+  if (!settingsSnapshot.exists()) {
+    const defaults = cloneDefaultAppSettings();
     await setDoc(settingsRef, defaults);
     return defaults;
   }
 
-  return normalizePipelineSettings(settingsSnapshot.data());
+  return normalizeAppSettings(settingsSnapshot.data());
 }
 
 function getStageById(pipelineSettings, stageId) {
@@ -160,6 +246,38 @@ function computeNextActionAt(baseNow, deltaDays, dayStartTime) {
   }
 
   targetDate.setHours(hours, minutes, 0, 0);
+  return Timestamp.fromDate(targetDate);
+}
+
+function computePushedTimestamp(baseNow, preset) {
+  const behavior = preset?.behavior || {};
+  const nowDate = new Date(baseNow);
+  const targetDate = new Date(nowDate);
+  targetDate.setSeconds(0, 0);
+
+  if (behavior.type === "addHours") {
+    targetDate.setHours(targetDate.getHours() + behavior.hours);
+    return Timestamp.fromDate(targetDate);
+  }
+
+  const [hourPart, minutePart] = sanitizeTimeString(behavior.time).split(":");
+  const hours = Number(hourPart);
+  const minutes = Number(minutePart);
+
+  if (behavior.type === "nextWeekdayTime") {
+    const targetWeekday = Number.parseInt(behavior.weekday, 10);
+    const currentWeekday = targetDate.getDay();
+    let daysUntil = (targetWeekday - currentWeekday + 7) % 7;
+    if (daysUntil === 0) daysUntil = 7;
+    targetDate.setDate(targetDate.getDate() + daysUntil);
+    targetDate.setHours(hours, minutes, 0, 0);
+    return Timestamp.fromDate(targetDate);
+  }
+
+  targetDate.setHours(hours, minutes, 0, 0);
+  if (targetDate.getTime() <= nowDate.getTime()) {
+    targetDate.setDate(targetDate.getDate() + 1);
+  }
   return Timestamp.fromDate(targetDate);
 }
 
@@ -284,7 +402,9 @@ async function renderDashboard() {
   renderLoading("Loading dashboard feed...");
 
   const now = Timestamp.now();
-  const pipelineSettings = await getPipelineSettings(currentUser.uid);
+  const appSettings = await getAppSettings(currentUser.uid);
+  const pipelineSettings = appSettings.pipeline;
+  const pushPresets = appSettings.pushPresets;
 
   const [contactsSnapshot, leadsSnapshot, legacyLeadsSnapshot, tasksSnapshot] = await Promise.all([
     getDocs(collection(db, "users", currentUser.uid, "contacts")),
@@ -365,6 +485,13 @@ async function renderDashboard() {
     };
   });
 
+  const pushOptionsMarkup = pushPresets
+    .map(
+      (preset, index) =>
+        `<button type="button" data-push-select="true" data-preset-index="${index}" class="push-option">${preset.label}</button>`
+    )
+    .join("");
+
   const feedItems = [...dueLeads, ...legacyDueLeads, ...dueTasks].sort(
     (a, b) => (toDate(a.dueAt)?.getTime() || 0) - (toDate(b.dueAt)?.getTime() || 0)
   );
@@ -386,7 +513,12 @@ async function renderDashboard() {
                 <div class="button-row">
                   ${item.source === "leads" ? `<button type="button" data-open-lead-id="${item.id}">View</button>` : ""}
                   <button type="button" data-lead-action="done" data-lead-source="${item.source}" data-lead-id="${item.id}">Done</button>
-                  <button type="button" class="secondary-btn" data-lead-action="push" data-lead-source="${item.source}" data-lead-id="${item.id}">Push</button>
+                  <details class="push-menu">
+                    <summary class="secondary-btn">Push</summary>
+                    <div class="push-dropdown" data-push-source="${item.source}" data-push-entity="lead" data-push-id="${item.id}">
+                      ${pushOptionsMarkup}
+                    </div>
+                  </details>
                 </div>
               </article>
             `;
@@ -403,7 +535,13 @@ async function renderDashboard() {
               ${item.notes ? `<p>${item.notes}</p>` : ""}
               <div class="button-row">
                 <button type="button" data-open-task-id="${item.id}">View</button>
-                <button type="button" data-task-action="complete" data-task-id="${item.id}">Complete</button>
+                <button type="button" data-task-action="done" data-task-id="${item.id}">Done</button>
+                <details class="push-menu">
+                  <summary class="secondary-btn">Push</summary>
+                  <div class="push-dropdown" data-push-entity="task" data-push-id="${item.id}">
+                    ${pushOptionsMarkup}
+                  </div>
+                </details>
               </div>
             </article>
           `;
@@ -438,7 +576,7 @@ async function renderDashboard() {
     };
 
     itemEl.addEventListener("click", (event) => {
-      if (event.target.closest("button")) return;
+      if (event.target.closest("button") || event.target.closest("summary")) return;
       navigateToContact();
     });
 
@@ -471,23 +609,11 @@ async function renderDashboard() {
       const leadSource = buttonEl.dataset.leadSource;
       if (!leadId || !leadSource) return;
 
-      const action = buttonEl.dataset.leadAction;
       const nowDate = new Date();
       const leadRef = doc(db, "users", currentUser.uid, leadSource, leadId);
       const leadSnapshot = await getDoc(leadRef);
       if (!leadSnapshot.exists()) return;
       const lead = leadSnapshot.data();
-
-      if (action === "push") {
-        const nextActionAt = computeNextActionAt(nowDate, 1, pipelineSettings.dayStartTime);
-        await updateDoc(leadRef, {
-          nextActionAt,
-          lastActionAt: Timestamp.fromDate(nowDate),
-          updatedAt: serverTimestamp(),
-        });
-        await renderDashboard();
-        return;
-      }
 
       const nextStage = getNextStage(pipelineSettings, lead.stageId || pipelineSettings.stages[0]?.id);
       if (!nextStage) {
@@ -534,6 +660,37 @@ async function renderDashboard() {
         completed: true,
         updatedAt: serverTimestamp(),
       });
+      await renderDashboard();
+    });
+  });
+
+  viewContainer.querySelectorAll("[data-push-select]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", async () => {
+      const presetIndex = Number.parseInt(buttonEl.dataset.presetIndex, 10);
+      const preset = pushPresets[presetIndex];
+      if (!preset) return;
+
+      const pushContainer = buttonEl.closest("[data-push-entity]");
+      const entityType = pushContainer?.dataset.pushEntity;
+      const entityId = pushContainer?.dataset.pushId;
+      const leadSource = pushContainer?.dataset.pushSource;
+      if (!entityType || !entityId) return;
+
+      const pushedAt = computePushedTimestamp(new Date(), preset);
+      if (entityType === "task") {
+        await updateDoc(doc(db, "users", currentUser.uid, "tasks", entityId), {
+          scheduledFor: pushedAt,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        if (!leadSource) return;
+        await updateDoc(doc(db, "users", currentUser.uid, leadSource, entityId), {
+          nextActionAt: pushedAt,
+          lastActionAt: Timestamp.now(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
       await renderDashboard();
     });
   });
@@ -1262,7 +1419,9 @@ function renderPlaceholder(title) {
 async function renderSettingsPage() {
   renderLoading("Loading settings...");
 
-  const pipelineSettings = await getPipelineSettings(currentUser.uid);
+  const appSettings = await getAppSettings(currentUser.uid);
+  const pipelineSettings = appSettings.pipeline;
+  const pushPresets = appSettings.pushPresets;
 
   viewContainer.innerHTML = `
     <section>
@@ -1286,7 +1445,53 @@ async function renderSettingsPage() {
           )
           .join("")}
 
-        <button type="submit" class="full-width">Save Pipeline Settings</button>
+        <h3>Dashboard Push Presets</h3>
+        ${pushPresets
+          .map((preset, index) => {
+            const behavior = preset.behavior || {};
+            return `
+              <div class="panel detail-grid">
+                <p><strong>Preset ${index + 1}</strong></p>
+                <label>Label
+                  <input name="push-label-${index}" value="${preset.label}" required />
+                </label>
+                <label>Behavior
+                  <select name="push-type-${index}">
+                    <option value="addHours" ${behavior.type === "addHours" ? "selected" : ""}>Add hours from now</option>
+                    <option value="nextTime" ${behavior.type === "nextTime" ? "selected" : ""}>Next time (today/tomorrow)</option>
+                    <option value="nextWeekdayTime" ${behavior.type === "nextWeekdayTime" ? "selected" : ""}>Next weekday at time</option>
+                  </select>
+                </label>
+                <label>Hours (for "Add hours")
+                  <input type="number" min="1" step="1" name="push-hours-${index}" value="${behavior.type === "addHours" ? behavior.hours : 1}" />
+                </label>
+                <label>Time (for next time/day)
+                  <input type="time" name="push-time-${index}" value="${sanitizeTimeString(behavior.time || "08:30")}" />
+                </label>
+                <label>Weekday (for next weekday)
+                  <select name="push-weekday-${index}">
+                    ${[
+                      [0, "Sunday"],
+                      [1, "Monday"],
+                      [2, "Tuesday"],
+                      [3, "Wednesday"],
+                      [4, "Thursday"],
+                      [5, "Friday"],
+                      [6, "Saturday"],
+                    ]
+                      .map(
+                        ([value, label]) =>
+                          `<option value="${value}" ${behavior.weekday === value ? "selected" : ""}>${label}</option>`
+                      )
+                      .join("")}
+                  </select>
+                </label>
+              </div>
+            `;
+          })
+          .join("")}
+
+        <button type="submit" class="full-width">Save Settings</button>
       </form>
     </section>
   `;
@@ -1306,7 +1511,28 @@ async function renderSettingsPage() {
       return;
     }
 
-    const normalized = normalizePipelineSettings({ dayStartTime, stages });
+    const pushPresetsPayload = pushPresets.map((_, index) => {
+      const label = String(formData.get(`push-label-${index}`) || "").trim() || `Preset ${index + 1}`;
+      const type = String(formData.get(`push-type-${index}`) || "nextTime");
+      const hours = Number.parseInt(String(formData.get(`push-hours-${index}`) || "1"), 10);
+      const time = sanitizeTimeString(String(formData.get(`push-time-${index}`) || "08:30"));
+      const weekday = Number.parseInt(String(formData.get(`push-weekday-${index}`) || "1"), 10);
+
+      if (type === "addHours") {
+        return { label, behavior: { type, hours } };
+      }
+
+      if (type === "nextWeekdayTime") {
+        return { label, behavior: { type, weekday, time } };
+      }
+
+      return { label, behavior: { type: "nextTime", time } };
+    });
+
+    const normalized = normalizeAppSettings({
+      pipeline: { dayStartTime, stages },
+      pushPresets: pushPresetsPayload,
+    });
     await setDoc(pipelineSettingsRef(currentUser.uid), normalized);
     await renderSettingsPage();
   });
