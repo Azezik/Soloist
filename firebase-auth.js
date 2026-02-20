@@ -379,6 +379,21 @@ function routeFromHash() {
   if (hash === "add-task") return { page: "add-task" };
   if (hash === "promotions") return { page: "promotions" };
   if (hash === "settings") return { page: "settings" };
+  if (hash.startsWith("contact/") && hash.endsWith("/edit")) {
+    const parts = hash.split("/");
+    return { page: "contact-edit", contactId: parts[1] };
+  }
+
+  if (hash.startsWith("lead/") && hash.endsWith("/edit")) {
+    const parts = hash.split("/");
+    return { page: "lead-edit", leadId: parts[1] };
+  }
+
+  if (hash.startsWith("task/") && hash.endsWith("/edit")) {
+    const parts = hash.split("/");
+    return { page: "task-edit", taskId: parts[1] };
+  }
+
   if (hash.startsWith("contact/")) {
     return { page: "contact-detail", contactId: hash.split("/")[1] };
   }
@@ -1154,7 +1169,7 @@ async function renderTasksPage() {
   });
 }
 
-async function renderTaskDetail(taskId, mode = "view") {
+async function renderTaskDetail(taskId) {
   renderLoading("Loading task details...");
 
   const taskRef = doc(db, "users", currentUser.uid, "tasks", taskId);
@@ -1171,29 +1186,6 @@ async function renderTaskDetail(taskId, mode = "view") {
   const task = { id: taskSnapshot.id, ...taskSnapshot.data() };
   const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
   const linkedContact = contacts.find((contact) => contact.id === task.contactId) || null;
-
-  if (mode === "edit") {
-    renderTaskForm({
-      mode: "edit",
-      contacts,
-      values: task,
-      onSubmit: async (values) => {
-        await updateDoc(taskRef, {
-          ...values,
-          updatedAt: serverTimestamp(),
-        });
-        await renderTaskDetail(taskId, "view");
-      },
-      onCancel: async () => {
-        await renderTaskDetail(taskId, "view");
-      },
-      onDelete: async () => {
-        await deleteDoc(taskRef);
-        window.location.hash = "#tasks";
-      },
-    });
-    return;
-  }
 
   viewContainer.innerHTML = `
     <section>
@@ -1213,11 +1205,49 @@ async function renderTaskDetail(taskId, mode = "view") {
   `;
 
   document.getElementById("edit-task-btn")?.addEventListener("click", () => {
-    renderTaskDetail(taskId, "edit");
+    window.location.hash = `#task/${taskId}/edit`;
   });
 }
 
-async function renderLeadDetail(leadId, mode = "view") {
+async function renderEditTaskForm(taskId) {
+  renderLoading("Loading task form...");
+
+  const taskRef = doc(db, "users", currentUser.uid, "tasks", taskId);
+  const [taskSnapshot, contactsSnapshot] = await Promise.all([
+    getDoc(taskRef),
+    getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
+  ]);
+
+  if (!taskSnapshot.exists()) {
+    viewContainer.innerHTML = '<p class="view-message">Task not found.</p>';
+    return;
+  }
+
+  const task = { id: taskSnapshot.id, ...taskSnapshot.data() };
+  const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+
+  renderTaskForm({
+    mode: "edit",
+    contacts,
+    values: task,
+    onSubmit: async (values) => {
+      await updateDoc(taskRef, {
+        ...values,
+        updatedAt: serverTimestamp(),
+      });
+      window.location.hash = `#task/${taskId}`;
+    },
+    onCancel: async () => {
+      window.location.hash = `#task/${taskId}`;
+    },
+    onDelete: async () => {
+      await deleteDoc(taskRef);
+      window.location.hash = "#tasks";
+    },
+  });
+}
+
+async function renderLeadDetail(leadId) {
   renderLoading("Loading lead details...");
 
   const leadRef = doc(db, "users", currentUser.uid, "leads", leadId);
@@ -1235,30 +1265,6 @@ async function renderLeadDetail(leadId, mode = "view") {
   const lead = { id: leadSnapshot.id, ...leadSnapshot.data() };
   const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
   const linkedContact = contacts.find((contact) => contact.id === lead.contactId) || null;
-
-  if (mode === "edit") {
-    renderLeadForm({
-      mode: "edit",
-      pipelineSettings,
-      contacts,
-      values: lead,
-      onSubmit: async (values) => {
-        await updateDoc(leadRef, {
-          ...values,
-          updatedAt: serverTimestamp(),
-        });
-        await renderLeadDetail(leadId, "view");
-      },
-      onCancel: async () => {
-        await renderLeadDetail(leadId, "view");
-      },
-      onDelete: async () => {
-        await deleteDoc(leadRef);
-        window.location.hash = "#dashboard";
-      },
-    });
-    return;
-  }
 
   viewContainer.innerHTML = `
     <section>
@@ -1278,11 +1284,51 @@ async function renderLeadDetail(leadId, mode = "view") {
   `;
 
   document.getElementById("edit-lead-btn")?.addEventListener("click", () => {
-    renderLeadDetail(leadId, "edit");
+    window.location.hash = `#lead/${leadId}/edit`;
   });
 }
 
-async function renderContactDetail(contactId, mode = "view") {
+async function renderEditLeadForm(leadId) {
+  renderLoading("Loading lead form...");
+
+  const leadRef = doc(db, "users", currentUser.uid, "leads", leadId);
+  const [pipelineSettings, leadSnapshot, contactsSnapshot] = await Promise.all([
+    getPipelineSettings(currentUser.uid),
+    getDoc(leadRef),
+    getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
+  ]);
+
+  if (!leadSnapshot.exists()) {
+    viewContainer.innerHTML = '<p class="view-message">Lead not found.</p>';
+    return;
+  }
+
+  const lead = { id: leadSnapshot.id, ...leadSnapshot.data() };
+  const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+
+  renderLeadForm({
+    mode: "edit",
+    pipelineSettings,
+    contacts,
+    values: lead,
+    onSubmit: async (values) => {
+      await updateDoc(leadRef, {
+        ...values,
+        updatedAt: serverTimestamp(),
+      });
+      window.location.hash = `#lead/${leadId}`;
+    },
+    onCancel: async () => {
+      window.location.hash = `#lead/${leadId}`;
+    },
+    onDelete: async () => {
+      await deleteDoc(leadRef);
+      window.location.hash = "#dashboard";
+    },
+  });
+}
+
+async function renderContactDetail(contactId) {
   renderLoading("Loading contact details...");
 
   const contactRef = doc(db, "users", currentUser.uid, "contacts", contactId);
@@ -1298,28 +1344,6 @@ async function renderContactDetail(contactId, mode = "view") {
   }
 
   const contact = contactSnapshot.data();
-
-  if (mode === "edit") {
-    renderContactForm({
-      mode: "edit",
-      values: contact,
-      onSubmit: async (values) => {
-        await updateDoc(contactRef, {
-          ...values,
-          updatedAt: serverTimestamp(),
-        });
-        await renderContactDetail(contactId, "view");
-      },
-      onCancel: async () => {
-        await renderContactDetail(contactId, "view");
-      },
-      onDelete: async () => {
-        await deleteDoc(contactRef);
-        window.location.hash = "#contacts";
-      },
-    });
-    return;
-  }
 
   const notes = Array.isArray(contact.notes) ? contact.notes : [];
   const tasks = tasksSnapshot.docs.map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }));
@@ -1390,7 +1414,7 @@ async function renderContactDetail(contactId, mode = "view") {
   `;
 
   document.getElementById("edit-contact-btn")?.addEventListener("click", () => {
-    renderContactDetail(contactId, "edit");
+    window.location.hash = `#contact/${contactId}/edit`;
   });
 
   document.getElementById("add-note-form")?.addEventListener("submit", async (event) => {
@@ -1404,6 +1428,39 @@ async function renderContactDetail(contactId, mode = "view") {
     });
 
     await renderContactDetail(contactId);
+  });
+}
+
+async function renderEditContactForm(contactId) {
+  renderLoading("Loading contact form...");
+
+  const contactRef = doc(db, "users", currentUser.uid, "contacts", contactId);
+  const contactSnapshot = await getDoc(contactRef);
+
+  if (!contactSnapshot.exists()) {
+    viewContainer.innerHTML = '<p class="view-message">Contact not found.</p>';
+    return;
+  }
+
+  const contact = { id: contactSnapshot.id, ...contactSnapshot.data() };
+
+  renderContactForm({
+    mode: "edit",
+    values: contact,
+    onSubmit: async (values) => {
+      await updateDoc(contactRef, {
+        ...values,
+        updatedAt: serverTimestamp(),
+      });
+      window.location.hash = `#contact/${contactId}`;
+    },
+    onCancel: async () => {
+      window.location.hash = `#contact/${contactId}`;
+    },
+    onDelete: async () => {
+      await deleteDoc(contactRef);
+      window.location.hash = "#contacts";
+    },
   });
 }
 
@@ -1579,13 +1636,28 @@ async function renderCurrentRoute() {
       return;
     }
 
+    if (route.page === "contact-edit" && route.contactId) {
+      await renderEditContactForm(route.contactId);
+      return;
+    }
+
     if (route.page === "lead-detail" && route.leadId) {
       await renderLeadDetail(route.leadId);
       return;
     }
 
+    if (route.page === "lead-edit" && route.leadId) {
+      await renderEditLeadForm(route.leadId);
+      return;
+    }
+
     if (route.page === "task-detail" && route.taskId) {
       await renderTaskDetail(route.taskId);
+      return;
+    }
+
+    if (route.page === "task-edit" && route.taskId) {
+      await renderEditTaskForm(route.taskId);
       return;
     }
 
