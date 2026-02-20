@@ -4,7 +4,7 @@ If your app can log in but fails with `FirebaseError: Missing or insufficient pe
 
 ## Recommended starter rules
 
-Use these rules so each authenticated user can access only their own contacts and tasks:
+Use these rules so each authenticated user can access only their own contacts, tasks, and pipeline settings:
 
 ```txt
 rules_version = '2';
@@ -15,6 +15,10 @@ service cloud.firestore {
     }
 
     match /users/{userId}/tasks/{taskId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /users/{userId}/settings/{settingId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
   }
@@ -29,6 +33,7 @@ The app reads/writes at:
 - `users/{currentUser.uid}/contacts/{contactId}`
 - `users/{currentUser.uid}/tasks`
 - `users/{currentUser.uid}/tasks/{taskId}`
+- `users/{currentUser.uid}/settings/pipeline`
 
 So rules must explicitly allow those paths for the signed-in user's UID.
 
