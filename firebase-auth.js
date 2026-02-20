@@ -210,7 +210,7 @@ function explainFirestoreError(error) {
   if (errorCode === "permission-denied") {
     return [
       "This account is signed in, but Firestore access was denied.",
-      "Update Firebase Firestore Security Rules to allow authenticated users to read and write users/{userId}/contacts, users/{userId}/tasks, and users/{userId}/settings/pipeline.",
+      "Update Firebase Firestore Security Rules to allow authenticated users to read and write users/{userId}/contacts, users/{userId}/leads, users/{userId}/tasks, and users/{userId}/settings/pipeline.",
     ].join(" ");
   }
 
@@ -254,6 +254,7 @@ function routeFromHash() {
   if (hash === "dashboard") return { page: "dashboard" };
   if (hash === "contacts") return { page: "contacts" };
   if (hash === "add-contact") return { page: "add-contact" };
+  if (hash === "add-lead") return { page: "add-lead" };
   if (hash === "add-task") return { page: "add-task" };
   if (hash === "promotions") return { page: "promotions" };
   if (hash === "settings") return { page: "settings" };
@@ -274,51 +275,148 @@ async function renderDashboard() {
   const now = Timestamp.now();
   const pipelineSettings = await getPipelineSettings(currentUser.uid);
 
-  const leadsSnapshot = await getDocs(
-    query(
-      collection(db, "users", currentUser.uid, "contacts"),
-      where("status", "==", "Open"),
-      where("nextActionAt", "<=", now),
-      orderBy("nextActionAt", "asc"),
-      orderBy("createdAt", "desc")
-    )
+  const [contactsSnapshot, leadsSnapshot, legacyLeadsSnapshot, tasksSnapshot] = await Promise.all([
+    getDocs(collection(db, "users", currentUser.uid, "contacts")),
+    getDocs(
+      query(
+        collection(db, "users", currentUser.uid, "leads"),
+        where("nextActionAt", "<=", now),
+        orderBy("nextActionAt", "asc"),
+        orderBy("createdAt", "desc")
+      )
+    ),
+    getDocs(
+      query(
+        collection(db, "users", currentUser.uid, "contacts"),
+        where("status", "==", "Open"),
+        where("nextActionAt", "<=", now),
+        orderBy("nextActionAt", "asc"),
+        orderBy("createdAt", "desc")
+      )
+    ),
+    getDocs(
+      query(
+        collection(db, "users", currentUser.uid, "tasks"),
+        where("completed", "==", false),
+        where("scheduledFor", "<=", now),
+        orderBy("scheduledFor", "asc")
+      )
+    ),
+  ]);
+
+  const contactById = contactsSnapshot.docs.reduce((acc, contactDoc) => {
+    acc[contactDoc.id] = { id: contactDoc.id, ...contactDoc.data() };
+    return acc;
+  }, {});
+
+  const dueLeads = leadsSnapshot.docs
+    .map((leadDoc) => ({ id: leadDoc.id, ...leadDoc.data() }))
+    .filter((lead) => lead.stageStatus !== "completed")
+    .map((lead) => {
+      const contact = contactById[lead.contactId] || {};
+      return {
+        type: "lead",
+        id: lead.id,
+        source: "leads",
+        contactId: lead.contactId || null,
+        title: contact.name || "Unnamed Contact",
+        subtitle: contact.product || "No product",
+        stageId: lead.stageId,
+        dueAt: lead.nextActionAt,
+      };
+    });
+
+  const legacyDueLeads = legacyLeadsSnapshot.docs.map((contactDoc) => {
+    const contact = { id: contactDoc.id, ...contactDoc.data() };
+    return {
+      type: "lead",
+      id: contact.id,
+      source: "contacts",
+      contactId: contact.id,
+      title: contact.name || "Unnamed Contact",
+      subtitle: contact.product || "No product",
+      stageId: contact.stageId,
+      dueAt: contact.nextActionAt,
+    };
+  });
+
+  const dueTasks = tasksSnapshot.docs.map((taskDoc) => {
+    const task = { id: taskDoc.id, ...taskDoc.data() };
+    const contact = task.contactId ? contactById[task.contactId] : null;
+    return {
+      type: "task",
+      id: task.id,
+      contactId: task.contactId || null,
+      title: task.title || "Untitled Task",
+      subtitle: contact?.name || "No contact",
+      notes: task.notes || "",
+      dueAt: task.scheduledFor,
+    };
+  });
+
+  const feedItems = [...dueLeads, ...legacyDueLeads, ...dueTasks].sort(
+    (a, b) => (toDate(a.dueAt)?.getTime() || 0) - (toDate(b.dueAt)?.getTime() || 0)
   );
 
-  const dueLeads = leadsSnapshot.docs.map((contactDoc) => ({
-    id: contactDoc.id,
-    ...contactDoc.data(),
-  }));
+  const feedMarkup = feedItems.length
+    ? feedItems
+        .map((item) => {
+          if (item.type === "lead") {
+            const stageLabel = getStageById(pipelineSettings, item.stageId)?.label || "Unknown stage";
+            return `
+              <article class="panel feed-item">
+                <p class="feed-type">Lead</p>
+                <h3>${item.title}</h3>
+                <p>${item.subtitle}</p>
+                <p><strong>Stage:</strong> ${stageLabel}</p>
+                <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
+                <div class="button-row">
+                  <button type="button" data-lead-action="done" data-lead-source="${item.source}" data-lead-id="${item.id}">Done</button>
+                  <button type="button" class="secondary-btn" data-lead-action="push" data-lead-source="${item.source}" data-lead-id="${item.id}">Push</button>
+                  ${
+                    item.contactId
+                      ? `<button type="button" class="secondary-btn" data-open-contact="true" data-contact-id="${item.contactId}">Open</button>`
+                      : ""
+                  }
+                </div>
+              </article>
+            `;
+          }
 
-  const feedMarkup = dueLeads.length
-    ? dueLeads
-        .map((lead) => {
-          const stageLabel = getStageById(pipelineSettings, lead.stageId)?.label || lead.stage || "Unknown stage";
           return `
             <article class="panel feed-item">
-              <p class="feed-type">Lead</p>
-              <h3>${lead.name || "Unnamed Contact"}</h3>
-              <p>${lead.product || "No product"}</p>
-              <p><strong>Stage:</strong> ${stageLabel}</p>
-              <p><strong>Due:</strong> ${formatDate(lead.nextActionAt)}</p>
+              <p class="feed-type">Task</p>
+              <h3>${item.title}</h3>
+              <p>${item.subtitle}</p>
+              <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
+              ${item.notes ? `<p>${item.notes}</p>` : ""}
               <div class="button-row">
-                <button type="button" data-lead-action="done" data-contact-id="${lead.id}">Done</button>
-                <button type="button" class="secondary-btn" data-lead-action="push" data-contact-id="${lead.id}">Push</button>
-                <button type="button" class="secondary-btn" data-contact-id="${lead.id}" data-open-contact="true">Open</button>
+                <button type="button" data-task-action="complete" data-task-id="${item.id}">Complete</button>
+                ${
+                  item.contactId
+                    ? `<button type="button" class="secondary-btn" data-open-contact="true" data-contact-id="${item.contactId}">Open</button>`
+                    : ""
+                }
               </div>
             </article>
           `;
         })
         .join("")
-    : '<p class="view-message">No leads are due right now.</p>';
+    : '<p class="view-message">No leads or tasks are due right now.</p>';
 
   viewContainer.innerHTML = `
     <section>
       <div class="view-header">
         <h2>Dashboard Feed</h2>
+        <button id="new-lead-btn" type="button">New Lead +</button>
       </div>
       <div class="feed-list">${feedMarkup}</div>
     </section>
   `;
+
+  document.getElementById("new-lead-btn")?.addEventListener("click", () => {
+    window.location.hash = "#add-lead";
+  });
 
   viewContainer.querySelectorAll('[data-open-contact="true"]').forEach((itemEl) => {
     itemEl.addEventListener("click", () => {
@@ -328,12 +426,13 @@ async function renderDashboard() {
 
   viewContainer.querySelectorAll("[data-lead-action]").forEach((buttonEl) => {
     buttonEl.addEventListener("click", async () => {
-      const contactId = buttonEl.dataset.contactId;
-      if (!contactId) return;
+      const leadId = buttonEl.dataset.leadId;
+      const leadSource = buttonEl.dataset.leadSource;
+      if (!leadId || !leadSource) return;
 
       const action = buttonEl.dataset.leadAction;
       const nowDate = new Date();
-      const leadRef = doc(db, "users", currentUser.uid, "contacts", contactId);
+      const leadRef = doc(db, "users", currentUser.uid, leadSource, leadId);
       const leadSnapshot = await getDoc(leadRef);
       if (!leadSnapshot.exists()) return;
       const lead = leadSnapshot.data();
@@ -351,12 +450,21 @@ async function renderDashboard() {
 
       const nextStage = getNextStage(pipelineSettings, lead.stageId || pipelineSettings.stages[0]?.id);
       if (!nextStage) {
-        await updateDoc(leadRef, {
-          status: "Closed",
-          nextActionAt: null,
-          lastActionAt: Timestamp.fromDate(nowDate),
-          updatedAt: serverTimestamp(),
-        });
+        if (leadSource === "leads") {
+          await updateDoc(leadRef, {
+            stageStatus: "completed",
+            nextActionAt: null,
+            lastActionAt: Timestamp.fromDate(nowDate),
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await updateDoc(leadRef, {
+            status: "Closed",
+            nextActionAt: null,
+            lastActionAt: Timestamp.fromDate(nowDate),
+            updatedAt: serverTimestamp(),
+          });
+        }
         await renderDashboard();
         return;
       }
@@ -367,8 +475,22 @@ async function renderDashboard() {
 
       await updateDoc(leadRef, {
         stageId: nextStage.id,
+        ...(leadSource === "leads" ? { stageStatus: "pending" } : {}),
         lastActionAt: Timestamp.fromDate(nowDate),
         nextActionAt,
+        updatedAt: serverTimestamp(),
+      });
+      await renderDashboard();
+    });
+  });
+
+  viewContainer.querySelectorAll("[data-task-action]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", async () => {
+      const taskId = buttonEl.dataset.taskId;
+      if (!taskId) return;
+
+      await updateDoc(doc(db, "users", currentUser.uid, "tasks", taskId), {
+        completed: true,
         updatedAt: serverTimestamp(),
       });
       await renderDashboard();
@@ -536,6 +658,131 @@ async function renderAddContactForm() {
     }
 
     await addDoc(collection(db, "users", currentUser.uid, "contacts"), payload);
+    window.location.hash = "#dashboard";
+  });
+}
+
+async function renderAddLeadForm() {
+  renderLoading("Loading lead form...");
+
+  const contactsSnapshot = await getDocs(
+    query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))
+  );
+
+  const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+
+  viewContainer.innerHTML = `
+    <section>
+      <div class="view-header">
+        <h2>New Lead</h2>
+      </div>
+      <form id="add-lead-form" class="panel form-grid">
+        <label>Contact Source
+          <select id="lead-contact-mode" name="contactMode">
+            <option value="new">Create new contact</option>
+            <option value="existing">Use existing contact</option>
+          </select>
+        </label>
+
+        <div id="new-contact-fields" class="form-grid full-width">
+          <label>Name <input name="name" /></label>
+          <label>Email <input name="email" type="email" /></label>
+          <label>Phone <input name="phone" type="tel" /></label>
+          <label>Product <input name="product" /></label>
+          <label>Price Quoted <input name="priceQuoted" /></label>
+        </div>
+
+        <div id="existing-contact-fields" class="form-grid full-width hidden">
+          <label>Search Contact
+            <input id="lead-contact-search" placeholder="Search by name or email" />
+          </label>
+          <label>Select Contact
+            <select id="lead-contact-select" name="existingContactId">
+              <option value="">Choose a contact</option>
+              ${contacts
+                .map((contact) => `<option value="${contact.id}">${contact.name || contact.email || contact.id}</option>`)
+                .join("")}
+            </select>
+          </label>
+        </div>
+
+        <button type="submit" class="full-width">Save Lead</button>
+      </form>
+    </section>
+  `;
+
+  const modeEl = document.getElementById("lead-contact-mode");
+  const newFieldsEl = document.getElementById("new-contact-fields");
+  const existingFieldsEl = document.getElementById("existing-contact-fields");
+  const searchEl = document.getElementById("lead-contact-search");
+  const selectEl = document.getElementById("lead-contact-select");
+
+  const syncMode = () => {
+    const isExisting = modeEl?.value === "existing";
+    newFieldsEl?.classList.toggle("hidden", isExisting);
+    existingFieldsEl?.classList.toggle("hidden", !isExisting);
+  };
+
+  syncMode();
+  modeEl?.addEventListener("change", syncMode);
+
+  searchEl?.addEventListener("input", () => {
+    const searchValue = String(searchEl.value || "").trim().toLowerCase();
+    selectEl.innerHTML = `
+      <option value="">Choose a contact</option>
+      ${contacts
+        .filter((contact) => {
+          if (!searchValue) return true;
+          const haystack = `${contact.name || ""} ${contact.email || ""}`.toLowerCase();
+          return haystack.includes(searchValue);
+        })
+        .map((contact) => `<option value="${contact.id}">${contact.name || contact.email || contact.id}</option>`)
+        .join("")}
+    `;
+  });
+
+  document.getElementById("add-lead-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const formData = new FormData(event.currentTarget);
+    const now = Timestamp.now();
+
+    let contactId = null;
+    if (String(formData.get("contactMode") || "new") === "existing") {
+      contactId = String(formData.get("existingContactId") || "").trim();
+      if (!contactId) {
+        alert("Please select an existing contact.");
+        return;
+      }
+    } else {
+      const contactPayload = {
+        name: String(formData.get("name") || "").trim(),
+        email: String(formData.get("email") || "").trim(),
+        phone: String(formData.get("phone") || "").trim(),
+        product: String(formData.get("product") || "").trim(),
+        priceQuoted: String(formData.get("priceQuoted") || "").trim(),
+        createdAt: now,
+        updatedAt: serverTimestamp(),
+      };
+
+      if (!contactPayload.name) {
+        alert("Name is required for a new contact.");
+        return;
+      }
+
+      const contactDoc = await addDoc(collection(db, "users", currentUser.uid, "contacts"), contactPayload);
+      contactId = contactDoc.id;
+    }
+
+    await addDoc(collection(db, "users", currentUser.uid, "leads"), {
+      contactId,
+      stageId: "stage1",
+      stageStatus: "pending",
+      nextActionAt: now,
+      createdAt: now,
+      updatedAt: serverTimestamp(),
+    });
+
     window.location.hash = "#dashboard";
   });
 }
@@ -791,6 +1038,11 @@ async function renderCurrentRoute() {
 
     if (route.page === "add-contact") {
       await renderAddContactForm();
+      return;
+    }
+
+    if (route.page === "add-lead") {
+      await renderAddLeadForm();
       return;
     }
 
