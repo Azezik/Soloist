@@ -374,6 +374,7 @@ function routeFromHash() {
   if (hash === "contacts") return { page: "contacts" };
   if (hash === "add-contact") return { page: "add-contact" };
   if (hash === "add-lead") return { page: "add-lead" };
+  if (hash === "leads") return { page: "leads" };
   if (hash === "tasks") return { page: "tasks" };
   if (hash === "tasks/new") return { page: "add-task" };
   if (hash === "add-task") return { page: "add-task" };
@@ -1186,6 +1187,64 @@ async function renderAddTaskForm() {
   });
 }
 
+async function renderLeadsPage() {
+  renderLoading("Loading leads...");
+
+  const [pipelineSettings, contactsSnapshot, leadsSnapshot] = await Promise.all([
+    getPipelineSettings(currentUser.uid),
+    getDocs(collection(db, "users", currentUser.uid, "contacts")),
+    getDocs(collection(db, "users", currentUser.uid, "leads")),
+  ]);
+
+  const contactById = contactsSnapshot.docs.reduce((acc, contactDoc) => {
+    acc[contactDoc.id] = { id: contactDoc.id, ...contactDoc.data() };
+    return acc;
+  }, {});
+
+  const leads = leadsSnapshot.docs
+    .map((leadDoc) => ({ id: leadDoc.id, ...leadDoc.data() }))
+    .sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0));
+
+  viewContainer.innerHTML = `
+    <section>
+      <div class="view-header">
+        <h2>Leads</h2>
+        <button id="add-lead-btn" type="button">Add Lead +</button>
+      </div>
+      <div class="feed-list">
+        ${
+          leads.length
+            ? leads
+                .map((lead) => {
+                  const linkedContact = lead.contactId ? contactById[lead.contactId] : null;
+                  return `
+                    <button class="panel feed-item" data-lead-id="${lead.id}" type="button">
+                      <h3>${linkedContact?.name || "Unnamed Lead"}</h3>
+                      <p><strong>Stage:</strong> ${getStageById(pipelineSettings, lead.stageId)?.label || lead.stageId || "-"}</p>
+                      <p><strong>Status:</strong> ${lead.stageStatus || "pending"}</p>
+                      <p><strong>Next Action:</strong> ${lead.nextActionAt ? formatDate(lead.nextActionAt) : "-"}</p>
+                      <p><strong>Created:</strong> ${formatDate(lead.createdAt)}</p>
+                    </button>
+                  `;
+                })
+                .join("")
+            : '<p class="view-message">No leads yet.</p>'
+        }
+      </div>
+    </section>
+  `;
+
+  document.getElementById("add-lead-btn")?.addEventListener("click", () => {
+    window.location.hash = "#add-lead";
+  });
+
+  viewContainer.querySelectorAll("[data-lead-id]").forEach((leadEl) => {
+    leadEl.addEventListener("click", () => {
+      window.location.hash = `#lead/${leadEl.dataset.leadId}`;
+    });
+  });
+}
+
 async function renderTasksPage() {
   renderLoading("Loading tasks...");
 
@@ -1716,6 +1775,11 @@ async function renderCurrentRoute() {
 
     if (route.page === "add-task") {
       await renderAddTaskForm();
+      return;
+    }
+
+    if (route.page === "leads") {
+      await renderLeadsPage();
       return;
     }
 
