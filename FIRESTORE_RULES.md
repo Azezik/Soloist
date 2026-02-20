@@ -4,7 +4,7 @@ If your app can log in but fails with `FirebaseError: Missing or insufficient pe
 
 ## Recommended starter rules
 
-Use these rules so each authenticated user can access only their own contacts, tasks, and pipeline settings:
+Use these rules so each authenticated user can access only their own CRM data (contacts, leads, tasks, notes, and settings):
 
 ```txt
 rules_version = '2';
@@ -14,11 +14,23 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
+    match /users/{userId}/leads/{leadId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
     match /users/{userId}/tasks/{taskId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
+    match /users/{userId}/notes/{noteId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
     match /users/{userId}/settings/{settingId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
   }
@@ -31,18 +43,19 @@ The app reads/writes at:
 
 - `users/{currentUser.uid}/contacts`
 - `users/{currentUser.uid}/contacts/{contactId}`
+- `users/{currentUser.uid}/leads`
+- `users/{currentUser.uid}/leads/{leadId}`
 - `users/{currentUser.uid}/tasks`
 - `users/{currentUser.uid}/tasks/{taskId}`
+- `users/{currentUser.uid}/notes`
+- `users/{currentUser.uid}/notes/{noteId}`
 - `users/{currentUser.uid}/settings/pipeline`
 
 So rules must explicitly allow those paths for the signed-in user's UID.
 
-## Optional: protect user profile docs too
+## Firebase Console quick apply
 
-If you later store user profile data at `users/{userId}`, add this:
-
-```txt
-match /users/{userId} {
-  allow read, write: if request.auth != null && request.auth.uid == userId;
-}
-```
+1. Open **Firestore Database → Rules**.
+2. Replace your rules with the snippet above.
+3. Click **Publish**.
+4. Refresh SoloistCRM.
