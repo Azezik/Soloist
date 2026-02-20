@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SoloistCRM Auth</title>
+    <title>SoloistCRM</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main class="auth-page">
+    <main id="auth-page" class="auth-page">
       <section class="auth-card" aria-labelledby="app-title">
         <h1 id="app-title">SoloistCRM</h1>
         <p class="subtext">Sign in or create an account to continue.</p>
@@ -42,6 +42,20 @@
 
         <p id="auth-status" class="status" role="status" aria-live="polite"></p>
       </section>
+    </main>
+
+    <main id="app-page" class="app-page hidden" aria-live="polite">
+      <header class="top-nav">
+        <div class="nav-links">
+          <a href="#dashboard" class="nav-link">Dashboard</a>
+          <span class="nav-link muted">Contacts</span>
+          <span class="nav-link muted">Promotions</span>
+          <span class="nav-link muted">Settings</span>
+        </div>
+        <button id="logout-btn" class="secondary-btn">Logout</button>
+      </header>
+
+      <section id="view-container" class="view-container"></section>
     </main>
 
     <script type="module" src="firebase-auth.js"></script>
