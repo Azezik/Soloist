@@ -18,6 +18,8 @@ import {
   serverTimestamp,
   updateDoc,
   arrayUnion,
+  Timestamp,
+  where,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -94,17 +96,39 @@ function explainFirestoreError(error) {
   if (errorCode === "permission-denied") {
     return [
       "This account is signed in, but Firestore access was denied.",
-      "Update Firebase Firestore Security Rules to allow authenticated users to read and write their own leads under users/{userId}/leads.",
+      "Update Firebase Firestore Security Rules to allow authenticated users to read and write users/{userId}/contacts and users/{userId}/tasks.",
     ].join(" ");
   }
 
   return `Firestore request failed (${errorCode}). Check Firestore rules and indexes in Firebase Console.`;
 }
 
+function toDate(value) {
+  if (!value) return null;
+  if (typeof value.toDate === "function") return value.toDate();
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function formatDate(value) {
-  if (!value) return "-";
-  const date = typeof value.toDate === "function" ? value.toDate() : new Date(value);
+  const date = toDate(value);
+  if (!date) return "-";
   return date.toLocaleString();
+}
+
+function parseScheduledFor(dateString, timeString) {
+  if (!dateString && !timeString) {
+    return Timestamp.now();
+  }
+
+  if (!dateString) {
+    return null;
+  }
+
+  const combined = `${dateString}T${timeString || "00:00"}`;
+  const parsed = new Date(combined);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return Timestamp.fromDate(parsed);
 }
 
 function routeFromHash() {
@@ -114,9 +138,13 @@ function routeFromHash() {
 
   const hash = window.location.hash.slice(1);
   if (hash === "dashboard") return { page: "dashboard" };
-  if (hash === "new-lead") return { page: "new-lead" };
-  if (hash.startsWith("lead/")) {
-    return { page: "lead-detail", leadId: hash.split("/")[1] };
+  if (hash === "contacts") return { page: "contacts" };
+  if (hash === "add-contact") return { page: "add-contact" };
+  if (hash === "add-task") return { page: "add-task" };
+  if (hash === "promotions") return { page: "promotions" };
+  if (hash === "settings") return { page: "settings" };
+  if (hash.startsWith("contact/")) {
+    return { page: "contact-detail", contactId: hash.split("/")[1] };
   }
 
   return { page: "dashboard" };
@@ -127,65 +155,216 @@ function renderLoading(text = "Loading...") {
 }
 
 async function renderDashboard() {
-  renderLoading("Loading leads...");
+  renderLoading("Loading dashboard feed...");
 
-  const leadsQuery = query(
-    collection(db, "users", currentUser.uid, "leads"),
-    orderBy("createdAt", "desc")
+  const now = Timestamp.now();
+
+  const contactsPromise = getDocs(
+    query(collection(db, "users", currentUser.uid, "contacts"), orderBy("createdAt", "desc"))
+  );
+  const tasksPromise = getDocs(
+    query(
+      collection(db, "users", currentUser.uid, "tasks"),
+      where("completed", "==", false),
+      where("scheduledFor", "<=", now),
+      orderBy("scheduledFor", "asc")
+    )
   );
 
-  const snapshot = await getDocs(leadsQuery);
-  const leads = snapshot.docs.map((leadDoc) => ({ id: leadDoc.id, ...leadDoc.data() }));
+  const [contactsSnapshot, tasksSnapshot] = await Promise.all([contactsPromise, tasksPromise]);
 
-  const feedMarkup = leads.length
-    ? leads
-        .map(
-          (lead) => `
-            <button class="lead-card" data-lead-id="${lead.id}" type="button">
-              <h3>${lead.name || "Unnamed Lead"}</h3>
-              <p>${lead.product || "No Product"}</p>
-              <p>${lead.stage || "Stage 1"}</p>
+  const feedItems = [
+    ...contactsSnapshot.docs.map((contactDoc) => {
+      const data = contactDoc.data();
+      return {
+        type: "contact",
+        id: contactDoc.id,
+        title: data.name || "Unnamed Contact",
+        subtitle: `${data.stage || "Stage 1"} · ${data.status || "Open"}`,
+        time: data.createdAt || data.updatedAt,
+      };
+    }),
+    ...tasksSnapshot.docs.map((taskDoc) => {
+      const data = taskDoc.data();
+      return {
+        type: "task",
+        id: taskDoc.id,
+        title: data.title || "Untitled Task",
+        subtitle: data.notes || "No task notes",
+        contactId: data.contactId || "",
+        time: data.scheduledFor || data.createdAt,
+      };
+    }),
+  ].sort((a, b) => {
+    const first = toDate(a.time)?.getTime() || 0;
+    const second = toDate(b.time)?.getTime() || 0;
+    return first - second;
+  });
+
+  const feedMarkup = feedItems.length
+    ? feedItems
+        .map((item) => {
+          if (item.type === "task") {
+            const contactLink = item.contactId
+              ? `<a href="#contact/${item.contactId}" class="inline-link">View linked contact</a>`
+              : "No linked contact";
+            return `
+              <article class="panel feed-item">
+                <p class="feed-type">Task</p>
+                <h3>${item.title}</h3>
+                <p>${item.subtitle}</p>
+                <p><strong>Scheduled:</strong> ${formatDate(item.time)}</p>
+                <p>${contactLink}</p>
+              </article>
+            `;
+          }
+
+          return `
+            <button class="panel feed-item" data-contact-id="${item.id}" type="button">
+              <p class="feed-type">Contact</p>
+              <h3>${item.title}</h3>
+              <p>${item.subtitle}</p>
+              <p><strong>Added:</strong> ${formatDate(item.time)}</p>
             </button>
-          `
-        )
+          `;
+        })
         .join("")
-    : '<p class="view-message">No leads yet. Click <strong>+ New Lead</strong> to add one.</p>';
+    : '<p class="view-message">No feed items yet. Add a contact or task to begin.</p>';
 
   viewContainer.innerHTML = `
     <section>
       <div class="view-header">
         <h2>Dashboard Feed</h2>
-        <button id="new-lead-btn" type="button">+ New Lead</button>
       </div>
-      <div class="lead-feed">${feedMarkup}</div>
+      <div class="feed-list">${feedMarkup}</div>
     </section>
   `;
 
-  document.getElementById("new-lead-btn")?.addEventListener("click", () => {
-    window.location.hash = "#new-lead";
-  });
-
-  viewContainer.querySelectorAll(".lead-card").forEach((card) => {
-    card.addEventListener("click", () => {
-      const { leadId } = card.dataset;
-      window.location.hash = `#lead/${leadId}`;
+  viewContainer.querySelectorAll("[data-contact-id]").forEach((itemEl) => {
+    itemEl.addEventListener("click", () => {
+      window.location.hash = `#contact/${itemEl.dataset.contactId}`;
     });
   });
 }
 
-function renderNewLeadForm() {
+async function renderContactsPage() {
+  renderLoading("Loading contacts...");
+
+  const [contactsSnapshot, tasksSnapshot] = await Promise.all([
+    getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("createdAt", "desc"))),
+    getDocs(collection(db, "users", currentUser.uid, "tasks")),
+  ]);
+
+  const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+  const tasks = tasksSnapshot.docs.map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }));
+
+  const taskCountByContact = tasks.reduce((acc, task) => {
+    if (!task.contactId) return acc;
+    acc[task.contactId] = (acc[task.contactId] || 0) + 1;
+    return acc;
+  }, {});
+
+  const stageOptions = ["All", ...new Set(contacts.map((contact) => contact.stage || "Stage 1"))];
+
   viewContainer.innerHTML = `
     <section>
       <div class="view-header">
-        <h2>New Lead</h2>
+        <h2>Contacts</h2>
+        <button id="add-contact-btn" type="button">+ Add Contact</button>
       </div>
-      <form id="new-lead-form" class="panel form-grid">
+
+      <div class="panel filters-grid">
+        <label>Search
+          <input id="contact-search" placeholder="Name, email, product" />
+        </label>
+
+        <label>Stage
+          <select id="stage-filter">
+            ${stageOptions
+              .map((stage) => `<option value="${stage}">${stage}</option>`)
+              .join("")}
+          </select>
+        </label>
+
+        <label>Task Filter
+          <select id="task-filter">
+            <option value="all">All</option>
+            <option value="with">With tasks</option>
+            <option value="without">Without tasks</option>
+          </select>
+        </label>
+      </div>
+
+      <div id="contacts-list" class="feed-list"></div>
+    </section>
+  `;
+
+  function renderFilteredContacts() {
+    const searchValue = String(document.getElementById("contact-search")?.value || "")
+      .trim()
+      .toLowerCase();
+    const stageValue = document.getElementById("stage-filter")?.value || "All";
+    const taskFilter = document.getElementById("task-filter")?.value || "all";
+
+    const filtered = contacts.filter((contact) => {
+      const haystack = `${contact.name || ""} ${contact.email || ""} ${contact.product || ""}`.toLowerCase();
+      const matchesSearch = !searchValue || haystack.includes(searchValue);
+      const matchesStage = stageValue === "All" || (contact.stage || "Stage 1") === stageValue;
+
+      const hasTasks = Boolean(taskCountByContact[contact.id]);
+      const matchesTaskFilter =
+        taskFilter === "all" || (taskFilter === "with" ? hasTasks : !hasTasks);
+
+      return matchesSearch && matchesStage && matchesTaskFilter;
+    });
+
+    const listEl = document.getElementById("contacts-list");
+    listEl.innerHTML = filtered.length
+      ? filtered
+          .map(
+            (contact) => `
+              <button class="panel feed-item" data-contact-id="${contact.id}" type="button">
+                <h3>${contact.name || "Unnamed Contact"}</h3>
+                <p>${contact.email || "No email"}</p>
+                <p>${contact.stage || "Stage 1"} · ${contact.status || "Open"}</p>
+                <p><strong>Tasks:</strong> ${taskCountByContact[contact.id] || 0}</p>
+              </button>
+            `
+          )
+          .join("")
+      : '<p class="view-message">No contacts match the current filters.</p>';
+
+    listEl.querySelectorAll("[data-contact-id]").forEach((itemEl) => {
+      itemEl.addEventListener("click", () => {
+        window.location.hash = `#contact/${itemEl.dataset.contactId}`;
+      });
+    });
+  }
+
+  ["contact-search", "stage-filter", "task-filter"].forEach((id) => {
+    document.getElementById(id)?.addEventListener("input", renderFilteredContacts);
+    document.getElementById(id)?.addEventListener("change", renderFilteredContacts);
+  });
+
+  document.getElementById("add-contact-btn")?.addEventListener("click", () => {
+    window.location.hash = "#add-contact";
+  });
+
+  renderFilteredContacts();
+}
+
+function renderAddContactForm() {
+  viewContainer.innerHTML = `
+    <section>
+      <div class="view-header">
+        <h2>Add Contact</h2>
+      </div>
+      <form id="add-contact-form" class="panel form-grid">
         <label>Name <input name="name" required /></label>
         <label>Email <input name="email" type="email" /></label>
         <label>Phone <input name="phone" type="tel" /></label>
         <label>Product <input name="product" /></label>
         <label>Price Quoted <input name="priceQuoted" /></label>
-        <label class="full-width">Notes <textarea name="notes" rows="5"></textarea></label>
 
         <label>Status
           <select name="status">
@@ -194,93 +373,179 @@ function renderNewLeadForm() {
           </select>
         </label>
 
-        <p class="meta-note">Stage defaults to Stage 1.</p>
-
-        <button type="submit" class="full-width">Save</button>
+        <button type="submit" class="full-width">Save Contact</button>
       </form>
     </section>
   `;
 
-  const formEl = document.getElementById("new-lead-form");
-  formEl.addEventListener("submit", async (event) => {
+  document.getElementById("add-contact-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    const formData = new FormData(formEl);
-    const nowTimestamp = serverTimestamp();
+    const formData = new FormData(event.currentTarget);
 
-    const leadPayload = {
+    const payload = {
       name: String(formData.get("name") || "").trim(),
       email: String(formData.get("email") || "").trim(),
       phone: String(formData.get("phone") || "").trim(),
       product: String(formData.get("product") || "").trim(),
       priceQuoted: String(formData.get("priceQuoted") || "").trim(),
-      notes: String(formData.get("notes") || "").trim(),
       stage: "Stage 1",
       status: String(formData.get("status") || "Open"),
-      createdAt: nowTimestamp,
-      lastUpdatedAt: nowTimestamp,
-      userId: currentUser.uid,
-      noteEntries: [],
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      notes: [],
     };
 
-    if (!leadPayload.name) {
+    if (!payload.name) {
       alert("Name is required.");
       return;
     }
 
-    const leadsCollection = collection(db, "users", currentUser.uid, "leads");
-    await addDoc(leadsCollection, leadPayload);
-
-    window.location.hash = "#dashboard";
+    await addDoc(collection(db, "users", currentUser.uid, "contacts"), payload);
+    window.location.hash = "#contacts";
   });
 }
 
-async function renderLeadDetail(leadId) {
-  renderLoading("Loading lead details...");
+async function renderAddTaskForm() {
+  renderLoading("Loading contacts for task creation...");
 
-  const leadRef = doc(db, "users", currentUser.uid, "leads", leadId);
-  const leadSnapshot = await getDoc(leadRef);
+  const contactsSnapshot = await getDocs(
+    query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))
+  );
 
-  if (!leadSnapshot.exists()) {
-    viewContainer.innerHTML = '<p class="view-message">Lead not found.</p>';
-    return;
-  }
-
-  const lead = leadSnapshot.data();
-  const noteEntries = Array.isArray(lead.noteEntries) ? lead.noteEntries : [];
+  const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
 
   viewContainer.innerHTML = `
     <section>
       <div class="view-header">
-        <h2>${lead.name || "Lead Detail"}</h2>
+        <h2>Add Task</h2>
       </div>
+      <form id="add-task-form" class="panel form-grid">
+        <label>Title <input name="title" required /></label>
+        <label class="full-width">Notes <textarea name="notes" rows="4"></textarea></label>
+
+        <label>Contact (Optional)
+          <select name="contactId">
+            <option value="">No contact</option>
+            ${contacts
+              .map((contact) => `<option value="${contact.id}">${contact.name || contact.email || contact.id}</option>`)
+              .join("")}
+          </select>
+        </label>
+
+        <label>Date (Optional)
+          <input name="scheduledDate" type="date" />
+        </label>
+
+        <label>Time (Optional)
+          <input name="scheduledTime" type="time" />
+        </label>
+
+        <button type="submit" class="full-width">Save Task</button>
+      </form>
+    </section>
+  `;
+
+  document.getElementById("add-task-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const formData = new FormData(event.currentTarget);
+    const scheduledFor = parseScheduledFor(
+      String(formData.get("scheduledDate") || "").trim(),
+      String(formData.get("scheduledTime") || "").trim()
+    );
+
+    if (!scheduledFor) {
+      alert("Please provide a valid date/time.");
+      return;
+    }
+
+    const payload = {
+      title: String(formData.get("title") || "").trim(),
+      notes: String(formData.get("notes") || "").trim(),
+      contactId: String(formData.get("contactId") || "").trim() || null,
+      scheduledFor,
+      completed: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    if (!payload.title) {
+      alert("Title is required.");
+      return;
+    }
+
+    await addDoc(collection(db, "users", currentUser.uid, "tasks"), payload);
+    window.location.hash = "#dashboard";
+  });
+}
+
+async function renderContactDetail(contactId) {
+  renderLoading("Loading contact details...");
+
+  const contactRef = doc(db, "users", currentUser.uid, "contacts", contactId);
+  const [contactSnapshot, tasksSnapshot] = await Promise.all([
+    getDoc(contactRef),
+    getDocs(query(collection(db, "users", currentUser.uid, "tasks"), where("contactId", "==", contactId))),
+  ]);
+
+  if (!contactSnapshot.exists()) {
+    viewContainer.innerHTML = '<p class="view-message">Contact not found.</p>';
+    return;
+  }
+
+  const contact = contactSnapshot.data();
+  const notes = Array.isArray(contact.notes) ? contact.notes : [];
+  const tasks = tasksSnapshot.docs.map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }));
+
+  viewContainer.innerHTML = `
+    <section>
+      <div class="view-header">
+        <h2>${contact.name || "Contact Detail"}</h2>
+      </div>
+
       <div class="panel detail-grid">
-        <p><strong>Email:</strong> ${lead.email || "-"}</p>
-        <p><strong>Phone:</strong> ${lead.phone || "-"}</p>
-        <p><strong>Product:</strong> ${lead.product || "-"}</p>
-        <p><strong>Price Quoted:</strong> ${lead.priceQuoted || "-"}</p>
-        <p><strong>Status:</strong> ${lead.status || "Open"}</p>
-        <p><strong>Stage:</strong> ${lead.stage || "Stage 1"}</p>
-        <p><strong>Created:</strong> ${formatDate(lead.createdAt)}</p>
+        <p><strong>Email:</strong> ${contact.email || "-"}</p>
+        <p><strong>Phone:</strong> ${contact.phone || "-"}</p>
+        <p><strong>Product:</strong> ${contact.product || "-"}</p>
+        <p><strong>Price Quoted:</strong> ${contact.priceQuoted || "-"}</p>
+        <p><strong>Status:</strong> ${contact.status || "Open"}</p>
+        <p><strong>Stage:</strong> ${contact.stage || "Stage 1"}</p>
+        <p><strong>Created:</strong> ${formatDate(contact.createdAt)}</p>
+        <p><strong>Updated:</strong> ${formatDate(contact.updatedAt)}</p>
       </div>
 
       <div class="panel notes-panel">
-        <h3>Notes</h3>
-        <p class="lead-notes">${lead.notes || "No general notes."}</p>
-
-        <h4>Timeline Notes</h4>
+        <h3>Tasks</h3>
         <ul class="note-list">
           ${
-            noteEntries.length
-              ? noteEntries
+            tasks.length
+              ? tasks
+                  .sort((a, b) => (toDate(a.scheduledFor)?.getTime() || 0) - (toDate(b.scheduledFor)?.getTime() || 0))
                   .map(
-                    (entry) => `<li>
-                      <p>${entry.noteText}</p>
-                      <small>${formatDate(entry.createdAt)} · ${entry.userId}</small>
+                    (task) => `<li>
+                      <p><strong>${task.title || "Untitled Task"}</strong> · ${task.completed ? "Completed" : "Active"}</p>
+                      <small>${formatDate(task.scheduledFor)}${task.notes ? ` · ${task.notes}` : ""}</small>
                     </li>`
                   )
                   .join("")
-              : "<li>No timeline notes yet.</li>"
+              : "<li>No tasks linked to this contact.</li>"
+          }
+        </ul>
+
+        <h3>Notes</h3>
+        <ul class="note-list">
+          ${
+            notes.length
+              ? notes
+                  .map(
+                    (entry) => `<li>
+                      <p>${entry.noteText}</p>
+                      <small>${formatDate(entry.createdAt)}</small>
+                    </li>`
+                  )
+                  .join("")
+              : "<li>No notes yet.</li>"
           }
         </ul>
 
@@ -294,24 +559,27 @@ async function renderLeadDetail(leadId) {
     </section>
   `;
 
-  const addNoteForm = document.getElementById("add-note-form");
-  addNoteForm.addEventListener("submit", async (event) => {
+  document.getElementById("add-note-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const noteText = String(new FormData(addNoteForm).get("noteText") || "").trim();
-
+    const noteText = String(new FormData(event.currentTarget).get("noteText") || "").trim();
     if (!noteText) return;
 
-    await updateDoc(leadRef, {
-      noteEntries: arrayUnion({
-        noteText,
-        createdAt: new Date().toISOString(),
-        userId: currentUser.uid,
-      }),
-      lastUpdatedAt: serverTimestamp(),
+    await updateDoc(contactRef, {
+      notes: arrayUnion({ noteText, createdAt: Timestamp.now() }),
+      updatedAt: serverTimestamp(),
     });
 
-    await renderLeadDetail(leadId);
+    await renderContactDetail(contactId);
   });
+}
+
+function renderPlaceholder(title) {
+  viewContainer.innerHTML = `
+    <section>
+      <div class="view-header"><h2>${title}</h2></div>
+      <p class="view-message">${title} is ready for future configuration.</p>
+    </section>
+  `;
 }
 
 async function renderCurrentRoute() {
@@ -320,13 +588,38 @@ async function renderCurrentRoute() {
   const route = routeFromHash();
 
   try {
-    if (route.page === "new-lead") {
-      renderNewLeadForm();
+    if (route.page === "dashboard") {
+      await renderDashboard();
       return;
     }
 
-    if (route.page === "lead-detail" && route.leadId) {
-      await renderLeadDetail(route.leadId);
+    if (route.page === "contacts") {
+      await renderContactsPage();
+      return;
+    }
+
+    if (route.page === "add-contact") {
+      renderAddContactForm();
+      return;
+    }
+
+    if (route.page === "add-task") {
+      await renderAddTaskForm();
+      return;
+    }
+
+    if (route.page === "contact-detail" && route.contactId) {
+      await renderContactDetail(route.contactId);
+      return;
+    }
+
+    if (route.page === "promotions") {
+      renderPlaceholder("Promotions");
+      return;
+    }
+
+    if (route.page === "settings") {
+      renderPlaceholder("Settings");
       return;
     }
 
