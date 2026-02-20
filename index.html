@@ -3,13 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SoloistCRM</title>
+    <title>smolCRM</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main id="auth-page" class="auth-page">
       <section class="auth-card" aria-labelledby="app-title">
-        <h1 id="app-title">SoloistCRM</h1>
+        <div class="brand-banner auth-brand" aria-label="Product name">smolCRM</div>
+        <h1 id="app-title">smolCRM</h1>
         <p class="subtext">Sign in or create an account to continue.</p>
 
         <form id="auth-form" class="auth-form" novalidate>
@@ -46,13 +47,16 @@
 
     <main id="app-page" class="app-page hidden" aria-live="polite">
       <header class="top-nav">
-        <div class="nav-links">
-          <a href="#dashboard" class="nav-link">Dashboard</a>
-          <a href="#contacts" class="nav-link">Contacts</a>
-          <a href="#leads" class="nav-link">Leads</a>
-          <a href="#tasks" class="nav-link">Tasks</a>
-          <a href="#promotions" class="nav-link">Promotions</a>
-          <a href="#settings" class="nav-link">Settings</a>
+        <div class="top-nav-left">
+          <div class="brand-banner" aria-label="Product name">smolCRM</div>
+          <div class="nav-links">
+            <a href="#dashboard" class="nav-link">Dashboard</a>
+            <a href="#contacts" class="nav-link">Contacts</a>
+            <a href="#leads" class="nav-link">Leads</a>
+            <a href="#tasks" class="nav-link">Tasks</a>
+            <a href="#promotions" class="nav-link">Promotions</a>
+            <a href="#settings" class="nav-link">Settings</a>
+          </div>
         </div>
         <button id="logout-btn" class="secondary-btn">Logout</button>
       </header>
