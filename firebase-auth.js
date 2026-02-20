@@ -16,6 +16,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  setDoc,
   updateDoc,
   arrayUnion,
   Timestamp,
@@ -47,6 +48,119 @@ const appPage = document.getElementById("app-page");
 const viewContainer = document.getElementById("view-container");
 
 let currentUser = null;
+
+const DEFAULT_PIPELINE_SETTINGS = {
+  dayStartTime: "08:30",
+  stages: [
+    { id: "stage1", label: "Stage 1", offsetDays: 0 },
+    { id: "stage2", label: "Stage 2", offsetDays: 2 },
+    { id: "stage3", label: "Stage 3", offsetDays: 7 },
+    { id: "stage4", label: "Stage 4", offsetDays: 15 },
+    { id: "stage5", label: "Stage 5", offsetDays: 30 },
+  ],
+};
+
+function cloneDefaultPipelineSettings() {
+  return {
+    dayStartTime: DEFAULT_PIPELINE_SETTINGS.dayStartTime,
+    stages: DEFAULT_PIPELINE_SETTINGS.stages.map((stage) => ({ ...stage })),
+  };
+}
+
+function sanitizeTimeString(rawValue) {
+  if (typeof rawValue !== "string") return DEFAULT_PIPELINE_SETTINGS.dayStartTime;
+  const match = rawValue.trim().match(/^(\d{2}):(\d{2})$/);
+  if (!match) return DEFAULT_PIPELINE_SETTINGS.dayStartTime;
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return DEFAULT_PIPELINE_SETTINGS.dayStartTime;
+  }
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function normalizePipelineSettings(input) {
+  const fallback = cloneDefaultPipelineSettings();
+  const stages = Array.isArray(input?.stages) ? input.stages : fallback.stages;
+
+  return {
+    dayStartTime: sanitizeTimeString(input?.dayStartTime),
+    stages: stages
+      .map((stage, index) => {
+        const fallbackStage = fallback.stages[index] || {
+          id: `stage${index + 1}`,
+          label: `Stage ${index + 1}`,
+          offsetDays: index,
+        };
+
+        const parsedOffset = Number.parseInt(stage?.offsetDays, 10);
+
+        return {
+          id: String(stage?.id || fallbackStage.id),
+          label: String(stage?.label || fallbackStage.label),
+          offsetDays: Number.isNaN(parsedOffset) ? fallbackStage.offsetDays : parsedOffset,
+        };
+      }),
+  };
+}
+
+function pipelineSettingsRef(uid) {
+  return doc(db, "users", uid, "settings", "pipeline");
+}
+
+async function getPipelineSettings(uid) {
+  const settingsRef = pipelineSettingsRef(uid);
+  const settingsSnapshot = await getDoc(settingsRef);
+
+  if (!settingsSnapshot.exists()) {
+    const defaults = cloneDefaultPipelineSettings();
+    await setDoc(settingsRef, defaults);
+    return defaults;
+  }
+
+  return normalizePipelineSettings(settingsSnapshot.data());
+}
+
+function getStageById(pipelineSettings, stageId) {
+  return pipelineSettings.stages.find((stage) => stage.id === stageId) || null;
+}
+
+function getNextStage(pipelineSettings, stageId) {
+  const index = pipelineSettings.stages.findIndex((stage) => stage.id === stageId);
+  if (index < 0 || index + 1 >= pipelineSettings.stages.length) return null;
+  return pipelineSettings.stages[index + 1];
+}
+
+function computeOffsetDeltaDays(pipelineSettings, currentStageId, nextStageId) {
+  const currentStage = getStageById(pipelineSettings, currentStageId);
+  const nextStage = getStageById(pipelineSettings, nextStageId);
+
+  if (!currentStage || !nextStage) return 0;
+
+  return Math.max(0, nextStage.offsetDays - currentStage.offsetDays);
+}
+
+function computeNextActionAt(baseNow, deltaDays, dayStartTime) {
+  const [hourPart, minutePart] = sanitizeTimeString(dayStartTime).split(":");
+  const hours = Number(hourPart);
+  const minutes = Number(minutePart);
+
+  const baseDate = new Date(baseNow);
+  const targetDate = new Date(baseDate);
+  targetDate.setSeconds(0, 0);
+
+  if (deltaDays === 0 && (baseDate.getHours() > hours || (baseDate.getHours() === hours && baseDate.getMinutes() > minutes))) {
+    targetDate.setDate(targetDate.getDate() + 1);
+  } else {
+    targetDate.setDate(targetDate.getDate() + deltaDays);
+  }
+
+  targetDate.setHours(hours, minutes, 0, 0);
+  return Timestamp.fromDate(targetDate);
+}
 
 function setStatus(message) {
   statusEl.textContent = message;
@@ -96,7 +210,7 @@ function explainFirestoreError(error) {
   if (errorCode === "permission-denied") {
     return [
       "This account is signed in, but Firestore access was denied.",
-      "Update Firebase Firestore Security Rules to allow authenticated users to read and write users/{userId}/contacts and users/{userId}/tasks.",
+      "Update Firebase Firestore Security Rules to allow authenticated users to read and write users/{userId}/contacts, users/{userId}/tasks, and users/{userId}/settings/pipeline.",
     ].join(" ");
   }
 
@@ -158,78 +272,44 @@ async function renderDashboard() {
   renderLoading("Loading dashboard feed...");
 
   const now = Timestamp.now();
+  const pipelineSettings = await getPipelineSettings(currentUser.uid);
 
-  const contactsPromise = getDocs(
-    query(collection(db, "users", currentUser.uid, "contacts"), orderBy("createdAt", "desc"))
-  );
-  const tasksPromise = getDocs(
+  const leadsSnapshot = await getDocs(
     query(
-      collection(db, "users", currentUser.uid, "tasks"),
-      where("completed", "==", false),
-      where("scheduledFor", "<=", now),
-      orderBy("scheduledFor", "asc")
+      collection(db, "users", currentUser.uid, "contacts"),
+      where("status", "==", "Open"),
+      where("nextActionAt", "<=", now),
+      orderBy("nextActionAt", "asc"),
+      orderBy("createdAt", "desc")
     )
   );
 
-  const [contactsSnapshot, tasksSnapshot] = await Promise.all([contactsPromise, tasksPromise]);
+  const dueLeads = leadsSnapshot.docs.map((contactDoc) => ({
+    id: contactDoc.id,
+    ...contactDoc.data(),
+  }));
 
-  const feedItems = [
-    ...contactsSnapshot.docs.map((contactDoc) => {
-      const data = contactDoc.data();
-      return {
-        type: "contact",
-        id: contactDoc.id,
-        title: data.name || "Unnamed Contact",
-        subtitle: `${data.stage || "Stage 1"} · ${data.status || "Open"}`,
-        time: data.createdAt || data.updatedAt,
-      };
-    }),
-    ...tasksSnapshot.docs.map((taskDoc) => {
-      const data = taskDoc.data();
-      return {
-        type: "task",
-        id: taskDoc.id,
-        title: data.title || "Untitled Task",
-        subtitle: data.notes || "No task notes",
-        contactId: data.contactId || "",
-        time: data.scheduledFor || data.createdAt,
-      };
-    }),
-  ].sort((a, b) => {
-    const first = toDate(a.time)?.getTime() || 0;
-    const second = toDate(b.time)?.getTime() || 0;
-    return first - second;
-  });
-
-  const feedMarkup = feedItems.length
-    ? feedItems
-        .map((item) => {
-          if (item.type === "task") {
-            const contactLink = item.contactId
-              ? `<a href="#contact/${item.contactId}" class="inline-link">View linked contact</a>`
-              : "No linked contact";
-            return `
-              <article class="panel feed-item">
-                <p class="feed-type">Task</p>
-                <h3>${item.title}</h3>
-                <p>${item.subtitle}</p>
-                <p><strong>Scheduled:</strong> ${formatDate(item.time)}</p>
-                <p>${contactLink}</p>
-              </article>
-            `;
-          }
-
+  const feedMarkup = dueLeads.length
+    ? dueLeads
+        .map((lead) => {
+          const stageLabel = getStageById(pipelineSettings, lead.stageId)?.label || lead.stage || "Unknown stage";
           return `
-            <button class="panel feed-item" data-contact-id="${item.id}" type="button">
-              <p class="feed-type">Contact</p>
-              <h3>${item.title}</h3>
-              <p>${item.subtitle}</p>
-              <p><strong>Added:</strong> ${formatDate(item.time)}</p>
-            </button>
+            <article class="panel feed-item">
+              <p class="feed-type">Lead</p>
+              <h3>${lead.name || "Unnamed Contact"}</h3>
+              <p>${lead.product || "No product"}</p>
+              <p><strong>Stage:</strong> ${stageLabel}</p>
+              <p><strong>Due:</strong> ${formatDate(lead.nextActionAt)}</p>
+              <div class="button-row">
+                <button type="button" data-lead-action="done" data-contact-id="${lead.id}">Done</button>
+                <button type="button" class="secondary-btn" data-lead-action="push" data-contact-id="${lead.id}">Push</button>
+                <button type="button" class="secondary-btn" data-contact-id="${lead.id}" data-open-contact="true">Open</button>
+              </div>
+            </article>
           `;
         })
         .join("")
-    : '<p class="view-message">No feed items yet. Add a contact or task to begin.</p>';
+    : '<p class="view-message">No leads are due right now.</p>';
 
   viewContainer.innerHTML = `
     <section>
@@ -240,9 +320,58 @@ async function renderDashboard() {
     </section>
   `;
 
-  viewContainer.querySelectorAll("[data-contact-id]").forEach((itemEl) => {
+  viewContainer.querySelectorAll('[data-open-contact="true"]').forEach((itemEl) => {
     itemEl.addEventListener("click", () => {
       window.location.hash = `#contact/${itemEl.dataset.contactId}`;
+    });
+  });
+
+  viewContainer.querySelectorAll("[data-lead-action]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", async () => {
+      const contactId = buttonEl.dataset.contactId;
+      if (!contactId) return;
+
+      const action = buttonEl.dataset.leadAction;
+      const nowDate = new Date();
+      const leadRef = doc(db, "users", currentUser.uid, "contacts", contactId);
+      const leadSnapshot = await getDoc(leadRef);
+      if (!leadSnapshot.exists()) return;
+      const lead = leadSnapshot.data();
+
+      if (action === "push") {
+        const nextActionAt = computeNextActionAt(nowDate, 1, pipelineSettings.dayStartTime);
+        await updateDoc(leadRef, {
+          nextActionAt,
+          lastActionAt: Timestamp.fromDate(nowDate),
+          updatedAt: serverTimestamp(),
+        });
+        await renderDashboard();
+        return;
+      }
+
+      const nextStage = getNextStage(pipelineSettings, lead.stageId || pipelineSettings.stages[0]?.id);
+      if (!nextStage) {
+        await updateDoc(leadRef, {
+          status: "Closed",
+          nextActionAt: null,
+          lastActionAt: Timestamp.fromDate(nowDate),
+          updatedAt: serverTimestamp(),
+        });
+        await renderDashboard();
+        return;
+      }
+
+      const currentStageId = lead.stageId || pipelineSettings.stages[0]?.id;
+      const deltaDays = computeOffsetDeltaDays(pipelineSettings, currentStageId, nextStage.id);
+      const nextActionAt = computeNextActionAt(nowDate, deltaDays, pipelineSettings.dayStartTime);
+
+      await updateDoc(leadRef, {
+        stageId: nextStage.id,
+        lastActionAt: Timestamp.fromDate(nowDate),
+        nextActionAt,
+        updatedAt: serverTimestamp(),
+      });
+      await renderDashboard();
     });
   });
 }
@@ -250,7 +379,8 @@ async function renderDashboard() {
 async function renderContactsPage() {
   renderLoading("Loading contacts...");
 
-  const [contactsSnapshot, tasksSnapshot] = await Promise.all([
+  const [pipelineSettings, contactsSnapshot, tasksSnapshot] = await Promise.all([
+    getPipelineSettings(currentUser.uid),
     getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("createdAt", "desc"))),
     getDocs(collection(db, "users", currentUser.uid, "tasks")),
   ]);
@@ -264,7 +394,7 @@ async function renderContactsPage() {
     return acc;
   }, {});
 
-  const stageOptions = ["All", ...new Set(contacts.map((contact) => contact.stage || "Stage 1"))];
+  const stageOptions = ["All", ...pipelineSettings.stages.map((stage) => stage.id)];
 
   viewContainer.innerHTML = `
     <section>
@@ -281,7 +411,10 @@ async function renderContactsPage() {
         <label>Stage
           <select id="stage-filter">
             ${stageOptions
-              .map((stage) => `<option value="${stage}">${stage}</option>`)
+              .map((stageId) => {
+                const label = stageId === "All" ? "All" : getStageById(pipelineSettings, stageId)?.label || stageId;
+                return `<option value="${stageId}">${label}</option>`;
+              })
               .join("")}
           </select>
         </label>
@@ -309,7 +442,8 @@ async function renderContactsPage() {
     const filtered = contacts.filter((contact) => {
       const haystack = `${contact.name || ""} ${contact.email || ""} ${contact.product || ""}`.toLowerCase();
       const matchesSearch = !searchValue || haystack.includes(searchValue);
-      const matchesStage = stageValue === "All" || (contact.stage || "Stage 1") === stageValue;
+      const stageId = contact.stageId || pipelineSettings.stages[0]?.id;
+      const matchesStage = stageValue === "All" || stageId === stageValue;
 
       const hasTasks = Boolean(taskCountByContact[contact.id]);
       const matchesTaskFilter =
@@ -321,16 +455,17 @@ async function renderContactsPage() {
     const listEl = document.getElementById("contacts-list");
     listEl.innerHTML = filtered.length
       ? filtered
-          .map(
-            (contact) => `
+          .map((contact) => {
+            const stageLabel = getStageById(pipelineSettings, contact.stageId)?.label || contact.stage || "Unknown stage";
+            return `
               <button class="panel feed-item" data-contact-id="${contact.id}" type="button">
                 <h3>${contact.name || "Unnamed Contact"}</h3>
                 <p>${contact.email || "No email"}</p>
-                <p>${contact.stage || "Stage 1"} · ${contact.status || "Open"}</p>
+                <p>${stageLabel} · ${contact.status || "Open"}</p>
                 <p><strong>Tasks:</strong> ${taskCountByContact[contact.id] || 0}</p>
               </button>
-            `
-          )
+            `;
+          })
           .join("")
       : '<p class="view-message">No contacts match the current filters.</p>';
 
@@ -353,7 +488,10 @@ async function renderContactsPage() {
   renderFilteredContacts();
 }
 
-function renderAddContactForm() {
+async function renderAddContactForm() {
+  const pipelineSettings = await getPipelineSettings(currentUser.uid);
+  const firstStageId = pipelineSettings.stages[0]?.id || "stage1";
+
   viewContainer.innerHTML = `
     <section>
       <div class="view-header">
@@ -366,13 +504,6 @@ function renderAddContactForm() {
         <label>Product <input name="product" /></label>
         <label>Price Quoted <input name="priceQuoted" /></label>
 
-        <label>Status
-          <select name="status">
-            <option value="Open" selected>Open</option>
-            <option value="Closed">Closed</option>
-          </select>
-        </label>
-
         <button type="submit" class="full-width">Save Contact</button>
       </form>
     </section>
@@ -382,6 +513,7 @@ function renderAddContactForm() {
     event.preventDefault();
 
     const formData = new FormData(event.currentTarget);
+    const now = Timestamp.now();
 
     const payload = {
       name: String(formData.get("name") || "").trim(),
@@ -389,9 +521,11 @@ function renderAddContactForm() {
       phone: String(formData.get("phone") || "").trim(),
       product: String(formData.get("product") || "").trim(),
       priceQuoted: String(formData.get("priceQuoted") || "").trim(),
-      stage: "Stage 1",
-      status: String(formData.get("status") || "Open"),
-      createdAt: serverTimestamp(),
+      stageId: firstStageId,
+      status: "Open",
+      createdAt: now,
+      nextActionAt: now,
+      lastActionAt: now,
       updatedAt: serverTimestamp(),
       notes: [],
     };
@@ -402,7 +536,7 @@ function renderAddContactForm() {
     }
 
     await addDoc(collection(db, "users", currentUser.uid, "contacts"), payload);
-    window.location.hash = "#contacts";
+    window.location.hash = "#dashboard";
   });
 }
 
@@ -484,7 +618,8 @@ async function renderContactDetail(contactId) {
   renderLoading("Loading contact details...");
 
   const contactRef = doc(db, "users", currentUser.uid, "contacts", contactId);
-  const [contactSnapshot, tasksSnapshot] = await Promise.all([
+  const [pipelineSettings, contactSnapshot, tasksSnapshot] = await Promise.all([
+    getPipelineSettings(currentUser.uid),
     getDoc(contactRef),
     getDocs(query(collection(db, "users", currentUser.uid, "tasks"), where("contactId", "==", contactId))),
   ]);
@@ -497,6 +632,7 @@ async function renderContactDetail(contactId) {
   const contact = contactSnapshot.data();
   const notes = Array.isArray(contact.notes) ? contact.notes : [];
   const tasks = tasksSnapshot.docs.map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }));
+  const stageLabel = getStageById(pipelineSettings, contact.stageId)?.label || contact.stage || "Unknown stage";
 
   viewContainer.innerHTML = `
     <section>
@@ -510,7 +646,9 @@ async function renderContactDetail(contactId) {
         <p><strong>Product:</strong> ${contact.product || "-"}</p>
         <p><strong>Price Quoted:</strong> ${contact.priceQuoted || "-"}</p>
         <p><strong>Status:</strong> ${contact.status || "Open"}</p>
-        <p><strong>Stage:</strong> ${contact.stage || "Stage 1"}</p>
+        <p><strong>Stage:</strong> ${stageLabel}</p>
+        <p><strong>Next Action:</strong> ${formatDate(contact.nextActionAt)}</p>
+        <p><strong>Last Action:</strong> ${formatDate(contact.lastActionAt)}</p>
         <p><strong>Created:</strong> ${formatDate(contact.createdAt)}</p>
         <p><strong>Updated:</strong> ${formatDate(contact.updatedAt)}</p>
       </div>
@@ -582,6 +720,59 @@ function renderPlaceholder(title) {
   `;
 }
 
+async function renderSettingsPage() {
+  renderLoading("Loading settings...");
+
+  const pipelineSettings = await getPipelineSettings(currentUser.uid);
+
+  viewContainer.innerHTML = `
+    <section>
+      <div class="view-header"><h2>Settings</h2></div>
+      <form id="pipeline-settings-form" class="panel form-grid">
+        <h3>Pipeline Settings</h3>
+        <label>Day Start Time (HH:MM)
+          <input name="dayStartTime" type="time" value="${pipelineSettings.dayStartTime}" required />
+        </label>
+
+        ${pipelineSettings.stages
+          .map(
+            (stage, index) => `
+              <div class="panel detail-grid">
+                <p><strong>${stage.label}</strong></p>
+                <label>Offset Days
+                  <input type="number" step="1" name="offset-${index}" value="${stage.offsetDays}" required />
+                </label>
+              </div>
+            `
+          )
+          .join("")}
+
+        <button type="submit" class="full-width">Save Pipeline Settings</button>
+      </form>
+    </section>
+  `;
+
+  document.getElementById("pipeline-settings-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const formData = new FormData(event.currentTarget);
+    const dayStartTime = sanitizeTimeString(String(formData.get("dayStartTime") || "08:30"));
+    const stages = pipelineSettings.stages.map((stage, index) => ({
+      ...stage,
+      offsetDays: Number.parseInt(String(formData.get(`offset-${index}`) || stage.offsetDays), 10),
+    }));
+
+    if (stages.some((stage) => Number.isNaN(stage.offsetDays) || stage.offsetDays < 0)) {
+      alert("Offset days must be a non-negative integer.");
+      return;
+    }
+
+    const normalized = normalizePipelineSettings({ dayStartTime, stages });
+    await setDoc(pipelineSettingsRef(currentUser.uid), normalized);
+    await renderSettingsPage();
+  });
+}
+
 async function renderCurrentRoute() {
   if (!currentUser) return;
 
@@ -599,7 +790,7 @@ async function renderCurrentRoute() {
     }
 
     if (route.page === "add-contact") {
-      renderAddContactForm();
+      await renderAddContactForm();
       return;
     }
 
@@ -619,7 +810,7 @@ async function renderCurrentRoute() {
     }
 
     if (route.page === "settings") {
-      renderPlaceholder("Settings");
+      await renderSettingsPage();
       return;
     }
 
