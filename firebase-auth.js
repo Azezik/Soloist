@@ -248,6 +248,31 @@ function computeNextActionAt(baseNow, deltaDays, dayStartTime) {
   return Timestamp.fromDate(targetDate);
 }
 
+function resolveStageOffsetMilliseconds(stage) {
+  if (!stage) return null;
+
+  const minuteOffset = Number.parseInt(stage.defaultFollowUpOffsetMinutes, 10);
+  if (!Number.isNaN(minuteOffset) && minuteOffset >= 0) return minuteOffset * 60 * 1000;
+
+  const hourOffset = Number.parseInt(stage.defaultFollowUpOffsetHours, 10);
+  if (!Number.isNaN(hourOffset) && hourOffset >= 0) return hourOffset * 60 * 60 * 1000;
+
+  const dayOffset = Number.parseInt(stage.defaultFollowUpOffsetDays, 10);
+  if (!Number.isNaN(dayOffset) && dayOffset >= 0) return dayOffset * 24 * 60 * 60 * 1000;
+
+  const legacyDayOffset = Number.parseInt(stage.offsetDays, 10);
+  if (!Number.isNaN(legacyDayOffset) && legacyDayOffset >= 0) return legacyDayOffset * 24 * 60 * 60 * 1000;
+
+  return null;
+}
+
+function computeInitialLeadNextActionAt(pipelineSettings, stageId, baseNow = new Date()) {
+  const selectedStage = getStageById(pipelineSettings, stageId);
+  const offsetMilliseconds = resolveStageOffsetMilliseconds(selectedStage);
+  if (offsetMilliseconds === null) return null;
+  return Timestamp.fromDate(new Date(baseNow.getTime() + offsetMilliseconds));
+}
+
 function computePushedTimestamp(baseNow, preset) {
   const behavior = preset?.behavior || {};
   const nowDate = new Date(baseNow);
@@ -915,13 +940,6 @@ function renderContactForm({ mode, values, onSubmit, onCancel, onDelete }) {
 
 function parseLeadFormValues(formEl) {
   const formData = new FormData(formEl);
-  const scheduledDate = String(formData.get("nextActionDate") || "").trim();
-  const scheduledTime = String(formData.get("nextActionTime") || "").trim();
-  const nextActionAt = parseScheduledFor(scheduledDate, scheduledTime);
-
-  if ((scheduledDate || scheduledTime) && !nextActionAt) {
-    throw new Error("Please provide a valid next action date/time.");
-  }
 
   return {
     selectedContactId: String(formData.get("selectedContactId") || "").trim() || null,
@@ -930,7 +948,6 @@ function parseLeadFormValues(formEl) {
     contactPhone: String(formData.get("contactPhone") || "").trim(),
     stageId: String(formData.get("stageId") || "").trim(),
     stageStatus: String(formData.get("stageStatus") || "pending").trim() || "pending",
-    nextActionAt,
     initialNote: String(formData.get("initialNote") || "").trim(),
   };
 }
@@ -980,13 +997,6 @@ function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, on
           </select>
         </label>
 
-        <label>Next Action Date
-          <input name="nextActionDate" type="date" value="${dateInputValue(values.nextActionAt)}" />
-        </label>
-
-        <label>Next Action Time
-          <input name="nextActionTime" type="time" value="${timeInputValue(values.nextActionAt)}" />
-        </label>
 
         <label class="full-width">Initial Note (Optional)
           <textarea name="initialNote" rows="3">${values.initialNote || ""}</textarea>
@@ -1061,16 +1071,12 @@ function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, on
 
   formEl?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    try {
-      const payload = parseLeadFormValues(event.currentTarget);
-      if (!payload.stageId) {
-        alert("Stage is required.");
-        return;
-      }
-      await onSubmit(payload);
-    } catch (error) {
-      alert(error.message);
+    const payload = parseLeadFormValues(event.currentTarget);
+    if (!payload.stageId) {
+      alert("Stage is required.");
+      return;
     }
+    await onSubmit(payload);
   });
 
   document.getElementById("lead-cancel-btn")?.addEventListener("click", onCancel);
@@ -1190,9 +1196,10 @@ async function renderAddLeadForm() {
     mode: "create",
     pipelineSettings,
     contacts,
-    values: { stageId: firstStageId, stageStatus: "pending", nextActionAt: Timestamp.now() },
+    values: { stageId: firstStageId, stageStatus: "pending" },
     onSubmit: async (values) => {
       const now = Timestamp.now();
+      const computedNextActionAt = computeInitialLeadNextActionAt(pipelineSettings, values.stageId, new Date());
       let contactId = values.selectedContactId || null;
 
       if (!contactId && values.contactName) {
@@ -1216,7 +1223,7 @@ async function renderAddLeadForm() {
         summary: values.initialNote || "",
         stageId: values.stageId,
         stageStatus: values.stageStatus || "pending",
-        nextActionAt: values.nextActionAt,
+        nextActionAt: computedNextActionAt,
         createdAt: now,
         updatedAt: serverTimestamp(),
       };
@@ -1428,7 +1435,7 @@ async function renderTaskDetail(taskId) {
           </label>
           <div class="button-row full-width">
             <button type="submit">Save Note</button>
-            <button type="button" id="task-mark-done-btn" class="secondary-btn">Mark Done</button>
+            ${task.completed ? '<button type="button" class="secondary-btn" disabled>Completed</button>' : '<button type="button" id="task-mark-done-btn" class="secondary-btn">Mark Done</button>'}
           </div>
         </form>
       </div>
@@ -1519,11 +1526,10 @@ async function renderLeadDetail(leadId) {
   renderLoading("Loading lead details...");
 
   const leadRef = doc(db, "users", currentUser.uid, "leads", leadId);
-  const [pipelineSettings, leadSnapshot, contactsSnapshot, leadTasksSnapshot, leadNotesSnapshot] = await Promise.all([
+  const [pipelineSettings, leadSnapshot, contactsSnapshot, leadNotesSnapshot] = await Promise.all([
     getPipelineSettings(currentUser.uid),
     getDoc(leadRef),
     getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
-    getDocs(collection(db, "users", currentUser.uid, "tasks")),
     getDocs(query(collection(db, "users", currentUser.uid, "notes"), where("parentType", "==", "lead"))),
   ]);
 
@@ -1535,10 +1541,6 @@ async function renderLeadDetail(leadId) {
   const lead = { id: leadSnapshot.id, ...leadSnapshot.data() };
   const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
   const linkedContact = contacts.find((contact) => contact.id === lead.contactId) || null;
-  const relatedTasks = leadTasksSnapshot.docs
-    .map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }))
-    .filter((task) => (lead.contactId ? task.contactId === lead.contactId : task.leadId === leadId))
-    .sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0));
   const leadNotes = leadNotesSnapshot.docs
     .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
     .filter((entry) => entry.parentId === leadId)
@@ -1560,11 +1562,6 @@ async function renderLeadDetail(leadId) {
       </div>
 
       <div class="panel notes-panel">
-        <h3>Associated Tasks</h3>
-        <ul class="note-list">
-          ${relatedTasks.length ? relatedTasks.map((task) => `<li><p><strong>${task.title || "Untitled Task"}</strong> · ${task.completed ? "Completed" : "Active"}</p><small>${formatDate(task.scheduledFor)}</small></li>`).join("") : "<li>No tasks linked to this lead.</li>"}
-        </ul>
-
         <h3>Lead Notes</h3>
         <ul class="note-list">
           ${leadNotes.length ? leadNotes.map((entry) => `<li><p>${entry.noteText}</p><small>${formatDate(entry.createdAt)}</small></li>`).join("") : "<li>No notes yet.</li>"}
@@ -1576,6 +1573,7 @@ async function renderLeadDetail(leadId) {
           </label>
           <div class="button-row full-width">
             <button type="submit">Save Note</button>
+            ${lead.contactId ? `<a href="#contact/${lead.contactId}" class="timeline-link-pill">View contact activity</a>` : ""}
             <button type="button" id="lead-close-btn" class="secondary-btn">Done / Close Lead</button>
           </div>
         </form>
@@ -1663,6 +1661,8 @@ async function renderEditLeadForm(leadId) {
         }
       }
 
+      const computedNextActionAt = computeInitialLeadNextActionAt(pipelineSettings, values.stageId, new Date());
+
       await updateDoc(leadRef, {
         ...buildTimelineEventFields("lead", {
           contactId: lead.contactId || null,
@@ -1672,7 +1672,7 @@ async function renderEditLeadForm(leadId) {
         title: values.contactName || lead.title || "Lead",
         stageId: values.stageId,
         stageStatus: values.stageStatus || "pending",
-        nextActionAt: values.nextActionAt,
+        nextActionAt: computedNextActionAt,
         updatedAt: serverTimestamp(),
       });
       window.location.hash = `#lead/${leadId}`;
@@ -1734,8 +1734,12 @@ async function renderContactDetail(contactId) {
 
       <div class="panel notes-panel">
         <h3>Timeline</h3>
-        <ul class="note-list">
-          ${timeline.length ? timeline.map((entry) => `<li><p><strong>${entry.label}:</strong> ${entry.href ? `<a href="${entry.href}">${entry.detail}</a>` : entry.detail}</p><small>${formatDate(entry.when)}</small></li>`).join("") : "<li>No timeline events yet.</li>"}
+        <ul class="timeline-list">
+          ${timeline.length ? timeline.map((entry) => {
+            const rowBody = `<div><p><strong>${entry.label}:</strong> ${entry.detail}</p><small>${formatDate(entry.when)}</small></div>`;
+            if (!entry.href) return `<li class="timeline-item">${rowBody}</li>`;
+            return `<li><a class="timeline-item timeline-item-link" href="${entry.href}">${rowBody}<span class="timeline-link-pill">View</span></a></li>`;
+          }).join("") : "<li>No timeline events yet.</li>"}
         </ul>
 
         <form id="add-note-form" class="form-grid">
