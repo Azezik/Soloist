@@ -9,6 +9,7 @@ import {
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -264,6 +265,14 @@ function routeFromHash() {
     return { page: "contact-detail", contactId: hash.split("/")[1] };
   }
 
+  if (hash.startsWith("lead/")) {
+    return { page: "lead-detail", leadId: hash.split("/")[1] };
+  }
+
+  if (hash.startsWith("task/")) {
+    return { page: "task-detail", taskId: hash.split("/")[1] };
+  }
+
   return { page: "dashboard" };
 }
 
@@ -375,6 +384,7 @@ async function renderDashboard() {
                 <p><strong>Stage:</strong> ${stageLabel}</p>
                 <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
                 <div class="button-row">
+                  ${item.source === "leads" ? `<button type="button" data-open-lead-id="${item.id}">View</button>` : ""}
                   <button type="button" data-lead-action="done" data-lead-source="${item.source}" data-lead-id="${item.id}">Done</button>
                   <button type="button" class="secondary-btn" data-lead-action="push" data-lead-source="${item.source}" data-lead-id="${item.id}">Push</button>
                 </div>
@@ -392,6 +402,7 @@ async function renderDashboard() {
               <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
               ${item.notes ? `<p>${item.notes}</p>` : ""}
               <div class="button-row">
+                <button type="button" data-open-task-id="${item.id}">View</button>
                 <button type="button" data-task-action="complete" data-task-id="${item.id}">Complete</button>
               </div>
             </article>
@@ -435,6 +446,22 @@ async function renderDashboard() {
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
       navigateToContact();
+    });
+  });
+
+  viewContainer.querySelectorAll("[data-open-lead-id]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", () => {
+      const leadId = buttonEl.dataset.openLeadId;
+      if (!leadId) return;
+      window.location.hash = `#lead/${leadId}`;
+    });
+  });
+
+  viewContainer.querySelectorAll("[data-open-task-id]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", () => {
+      const taskId = buttonEl.dataset.openTaskId;
+      if (!taskId) return;
+      window.location.hash = `#task/${taskId}`;
     });
   });
 
@@ -624,180 +651,268 @@ async function renderContactsPage() {
   renderFilteredContacts();
 }
 
-async function renderAddContactForm() {
-  const pipelineSettings = await getPipelineSettings(currentUser.uid);
-  const firstStageId = pipelineSettings.stages[0]?.id || "stage1";
+function dateInputValue(value) {
+  const date = toDate(value);
+  if (!date) return "";
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
 
+function timeInputValue(value) {
+  const date = toDate(value);
+  if (!date) return "";
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function parseContactFormValues(formEl) {
+  const formData = new FormData(formEl);
+  return {
+    name: String(formData.get("name") || "").trim(),
+    email: String(formData.get("email") || "").trim(),
+    phone: String(formData.get("phone") || "").trim(),
+    product: String(formData.get("product") || "").trim(),
+    priceQuoted: String(formData.get("priceQuoted") || "").trim(),
+  };
+}
+
+function renderContactForm({ mode, values, onSubmit, onCancel, onDelete }) {
   viewContainer.innerHTML = `
     <section>
       <div class="view-header">
-        <h2>Add Contact</h2>
+        <h2>${mode === "create" ? "Add Contact" : values.name || "Edit Contact"}</h2>
       </div>
-      <form id="add-contact-form" class="panel form-grid">
-        <label>Name <input name="name" required /></label>
-        <label>Email <input name="email" type="email" /></label>
-        <label>Phone <input name="phone" type="tel" /></label>
-        <label>Product <input name="product" /></label>
-        <label>Price Quoted <input name="priceQuoted" /></label>
+      <form id="contact-form" class="panel form-grid">
+        <label>Name <input name="name" value="${values.name || ""}" required /></label>
+        <label>Email <input name="email" type="email" value="${values.email || ""}" /></label>
+        <label>Phone <input name="phone" type="tel" value="${values.phone || ""}" /></label>
+        <label>Product <input name="product" value="${values.product || ""}" /></label>
+        <label>Price Quoted <input name="priceQuoted" value="${values.priceQuoted || ""}" /></label>
 
-        <button type="submit" class="full-width">Save Contact</button>
+        <div class="button-row full-width">
+          <button type="submit">Save</button>
+          ${mode === "edit" ? '<button type="button" id="contact-cancel-btn" class="secondary-btn">Cancel</button><button type="button" id="contact-delete-btn" class="secondary-btn">Delete</button>' : ""}
+        </div>
       </form>
     </section>
   `;
 
-  document.getElementById("add-contact-form")?.addEventListener("submit", async (event) => {
+  document.getElementById("contact-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-
-    const formData = new FormData(event.currentTarget);
-    const now = Timestamp.now();
-
-    const payload = {
-      name: String(formData.get("name") || "").trim(),
-      email: String(formData.get("email") || "").trim(),
-      phone: String(formData.get("phone") || "").trim(),
-      product: String(formData.get("product") || "").trim(),
-      priceQuoted: String(formData.get("priceQuoted") || "").trim(),
-      stageId: firstStageId,
-      status: "Open",
-      createdAt: now,
-      nextActionAt: now,
-      lastActionAt: now,
-      updatedAt: serverTimestamp(),
-      notes: [],
-    };
-
+    const payload = parseContactFormValues(event.currentTarget);
     if (!payload.name) {
       alert("Name is required.");
       return;
     }
+    await onSubmit(payload);
+  });
 
-    await addDoc(collection(db, "users", currentUser.uid, "contacts"), payload);
-    window.location.hash = "#dashboard";
+  document.getElementById("contact-cancel-btn")?.addEventListener("click", onCancel);
+  document.getElementById("contact-delete-btn")?.addEventListener("click", onDelete);
+}
+
+function parseLeadFormValues(formEl) {
+  const formData = new FormData(formEl);
+  const scheduledDate = String(formData.get("nextActionDate") || "").trim();
+  const scheduledTime = String(formData.get("nextActionTime") || "").trim();
+  const nextActionAt = parseScheduledFor(scheduledDate, scheduledTime);
+
+  if ((scheduledDate || scheduledTime) && !nextActionAt) {
+    throw new Error("Please provide a valid next action date/time.");
+  }
+
+  return {
+    contactId: String(formData.get("contactId") || "").trim() || null,
+    stageId: String(formData.get("stageId") || "").trim(),
+    stageStatus: String(formData.get("stageStatus") || "pending").trim() || "pending",
+    nextActionAt,
+  };
+}
+
+function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, onCancel, onDelete }) {
+  viewContainer.innerHTML = `
+    <section>
+      <div class="view-header">
+        <h2>${mode === "create" ? "New Lead" : "Edit Lead"}</h2>
+      </div>
+      <form id="lead-form" class="panel form-grid">
+        <label>Contact
+          <select name="contactId">
+            <option value="">No contact</option>
+            ${contacts
+              .map((contact) => `<option value="${contact.id}" ${values.contactId === contact.id ? "selected" : ""}>${contact.name || contact.email || contact.id}</option>`)
+              .join("")}
+          </select>
+        </label>
+
+        <label>Stage
+          <select name="stageId">
+            ${pipelineSettings.stages
+              .map((stage) => `<option value="${stage.id}" ${values.stageId === stage.id ? "selected" : ""}>${stage.label}</option>`)
+              .join("")}
+          </select>
+        </label>
+
+        <label>Status
+          <select name="stageStatus">
+            ${["pending", "completed"].map((status) => `<option value="${status}" ${values.stageStatus === status ? "selected" : ""}>${status}</option>`).join("")}
+          </select>
+        </label>
+
+        <label>Next Action Date
+          <input name="nextActionDate" type="date" value="${dateInputValue(values.nextActionAt)}" />
+        </label>
+
+        <label>Next Action Time
+          <input name="nextActionTime" type="time" value="${timeInputValue(values.nextActionAt)}" />
+        </label>
+
+        <div class="button-row full-width">
+          <button type="submit">Save</button>
+          ${mode === "edit" ? '<button type="button" id="lead-cancel-btn" class="secondary-btn">Cancel</button><button type="button" id="lead-delete-btn" class="secondary-btn">Delete</button>' : ""}
+        </div>
+      </form>
+    </section>
+  `;
+
+  document.getElementById("lead-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const payload = parseLeadFormValues(event.currentTarget);
+      if (!payload.stageId) {
+        alert("Stage is required.");
+        return;
+      }
+      await onSubmit(payload);
+    } catch (error) {
+      alert(error.message);
+    }
+  });
+
+  document.getElementById("lead-cancel-btn")?.addEventListener("click", onCancel);
+  document.getElementById("lead-delete-btn")?.addEventListener("click", onDelete);
+}
+
+function parseTaskFormValues(formEl) {
+  const formData = new FormData(formEl);
+  const scheduledDate = String(formData.get("scheduledDate") || "").trim();
+  const scheduledTime = String(formData.get("scheduledTime") || "").trim();
+  const scheduledFor = parseScheduledFor(scheduledDate, scheduledTime);
+
+  if ((scheduledDate || scheduledTime) && !scheduledFor) {
+    throw new Error("Please provide a valid date/time.");
+  }
+
+  return {
+    title: String(formData.get("title") || "").trim(),
+    notes: String(formData.get("notes") || "").trim(),
+    contactId: String(formData.get("contactId") || "").trim() || null,
+    scheduledFor,
+  };
+}
+
+function renderTaskForm({ mode, contacts, values, onSubmit, onCancel, onDelete }) {
+  viewContainer.innerHTML = `
+    <section>
+      <div class="view-header">
+        <h2>${mode === "create" ? "Add Task" : values.title || "Edit Task"}</h2>
+      </div>
+      <form id="task-form" class="panel form-grid">
+        <label>Title <input name="title" value="${values.title || ""}" required /></label>
+        <label class="full-width">Notes <textarea name="notes" rows="4">${values.notes || ""}</textarea></label>
+
+        <label>Contact (Optional)
+          <select name="contactId">
+            <option value="">No contact</option>
+            ${contacts
+              .map((contact) => `<option value="${contact.id}" ${values.contactId === contact.id ? "selected" : ""}>${contact.name || contact.email || contact.id}</option>`)
+              .join("")}
+          </select>
+        </label>
+
+        <label>Date (Optional)
+          <input name="scheduledDate" type="date" value="${dateInputValue(values.scheduledFor)}" />
+        </label>
+
+        <label>Time (Optional)
+          <input name="scheduledTime" type="time" value="${timeInputValue(values.scheduledFor)}" />
+        </label>
+
+        <div class="button-row full-width">
+          <button type="submit">Save</button>
+          ${mode === "edit" ? '<button type="button" id="task-cancel-btn" class="secondary-btn">Cancel</button><button type="button" id="task-delete-btn" class="secondary-btn">Delete</button>' : ""}
+        </div>
+      </form>
+    </section>
+  `;
+
+  document.getElementById("task-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const payload = parseTaskFormValues(event.currentTarget);
+      if (!payload.title) {
+        alert("Title is required.");
+        return;
+      }
+      await onSubmit(payload);
+    } catch (error) {
+      alert(error.message);
+    }
+  });
+
+  document.getElementById("task-cancel-btn")?.addEventListener("click", onCancel);
+  document.getElementById("task-delete-btn")?.addEventListener("click", onDelete);
+}
+
+async function renderAddContactForm() {
+  renderLoading("Loading contact form...");
+  const pipelineSettings = await getPipelineSettings(currentUser.uid);
+  const firstStageId = pipelineSettings.stages[0]?.id || "stage1";
+
+  renderContactForm({
+    mode: "create",
+    values: {},
+    onSubmit: async (values) => {
+      const now = Timestamp.now();
+      await addDoc(collection(db, "users", currentUser.uid, "contacts"), {
+        ...values,
+        stageId: firstStageId,
+        status: "Open",
+        createdAt: now,
+        nextActionAt: now,
+        lastActionAt: now,
+        updatedAt: serverTimestamp(),
+        notes: [],
+      });
+      window.location.hash = "#dashboard";
+    },
   });
 }
 
 async function renderAddLeadForm() {
   renderLoading("Loading lead form...");
-
-  const contactsSnapshot = await getDocs(
-    query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))
-  );
-
+  const [pipelineSettings, contactsSnapshot] = await Promise.all([
+    getPipelineSettings(currentUser.uid),
+    getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
+  ]);
   const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+  const firstStageId = pipelineSettings.stages[0]?.id || "stage1";
 
-  viewContainer.innerHTML = `
-    <section>
-      <div class="view-header">
-        <h2>New Lead</h2>
-      </div>
-      <form id="add-lead-form" class="panel form-grid">
-        <label>Contact Source
-          <select id="lead-contact-mode" name="contactMode">
-            <option value="new">Create new contact</option>
-            <option value="existing">Use existing contact</option>
-          </select>
-        </label>
-
-        <div id="new-contact-fields" class="form-grid full-width">
-          <label>Name <input name="name" /></label>
-          <label>Email <input name="email" type="email" /></label>
-          <label>Phone <input name="phone" type="tel" /></label>
-          <label>Product <input name="product" /></label>
-          <label>Price Quoted <input name="priceQuoted" /></label>
-        </div>
-
-        <div id="existing-contact-fields" class="form-grid full-width hidden">
-          <label>Search Contact
-            <input id="lead-contact-search" placeholder="Search by name or email" />
-          </label>
-          <label>Select Contact
-            <select id="lead-contact-select" name="existingContactId">
-              <option value="">Choose a contact</option>
-              ${contacts
-                .map((contact) => `<option value="${contact.id}">${contact.name || contact.email || contact.id}</option>`)
-                .join("")}
-            </select>
-          </label>
-        </div>
-
-        <button type="submit" class="full-width">Save Lead</button>
-      </form>
-    </section>
-  `;
-
-  const modeEl = document.getElementById("lead-contact-mode");
-  const newFieldsEl = document.getElementById("new-contact-fields");
-  const existingFieldsEl = document.getElementById("existing-contact-fields");
-  const searchEl = document.getElementById("lead-contact-search");
-  const selectEl = document.getElementById("lead-contact-select");
-
-  const syncMode = () => {
-    const isExisting = modeEl?.value === "existing";
-    newFieldsEl?.classList.toggle("hidden", isExisting);
-    existingFieldsEl?.classList.toggle("hidden", !isExisting);
-  };
-
-  syncMode();
-  modeEl?.addEventListener("change", syncMode);
-
-  searchEl?.addEventListener("input", () => {
-    const searchValue = String(searchEl.value || "").trim().toLowerCase();
-    selectEl.innerHTML = `
-      <option value="">Choose a contact</option>
-      ${contacts
-        .filter((contact) => {
-          if (!searchValue) return true;
-          const haystack = `${contact.name || ""} ${contact.email || ""}`.toLowerCase();
-          return haystack.includes(searchValue);
-        })
-        .map((contact) => `<option value="${contact.id}">${contact.name || contact.email || contact.id}</option>`)
-        .join("")}
-    `;
-  });
-
-  document.getElementById("add-lead-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-
-    const formData = new FormData(event.currentTarget);
-    const now = Timestamp.now();
-
-    let contactId = null;
-    if (String(formData.get("contactMode") || "new") === "existing") {
-      contactId = String(formData.get("existingContactId") || "").trim();
-      if (!contactId) {
-        alert("Please select an existing contact.");
-        return;
-      }
-    } else {
-      const contactPayload = {
-        name: String(formData.get("name") || "").trim(),
-        email: String(formData.get("email") || "").trim(),
-        phone: String(formData.get("phone") || "").trim(),
-        product: String(formData.get("product") || "").trim(),
-        priceQuoted: String(formData.get("priceQuoted") || "").trim(),
+  renderLeadForm({
+    mode: "create",
+    pipelineSettings,
+    contacts,
+    values: { stageId: firstStageId, stageStatus: "pending", nextActionAt: Timestamp.now() },
+    onSubmit: async (values) => {
+      const now = Timestamp.now();
+      await addDoc(collection(db, "users", currentUser.uid, "leads"), {
+        ...values,
         createdAt: now,
         updatedAt: serverTimestamp(),
-      };
-
-      if (!contactPayload.name) {
-        alert("Name is required for a new contact.");
-        return;
-      }
-
-      const contactDoc = await addDoc(collection(db, "users", currentUser.uid, "contacts"), contactPayload);
-      contactId = contactDoc.id;
-    }
-
-    await addDoc(collection(db, "users", currentUser.uid, "leads"), {
-      contactId,
-      stageId: "stage1",
-      stageStatus: "pending",
-      nextActionAt: now,
-      createdAt: now,
-      updatedAt: serverTimestamp(),
-    });
-
-    window.location.hash = "#dashboard";
+      });
+      window.location.hash = "#dashboard";
+    },
   });
 }
 
@@ -810,67 +925,19 @@ async function renderAddTaskForm() {
 
   const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
 
-  viewContainer.innerHTML = `
-    <section>
-      <div class="view-header">
-        <h2>Add Task</h2>
-      </div>
-      <form id="add-task-form" class="panel form-grid">
-        <label>Title <input name="title" required /></label>
-        <label class="full-width">Notes <textarea name="notes" rows="4"></textarea></label>
-
-        <label>Contact (Optional)
-          <select name="contactId">
-            <option value="">No contact</option>
-            ${contacts
-              .map((contact) => `<option value="${contact.id}">${contact.name || contact.email || contact.id}</option>`)
-              .join("")}
-          </select>
-        </label>
-
-        <label>Date (Optional)
-          <input name="scheduledDate" type="date" />
-        </label>
-
-        <label>Time (Optional)
-          <input name="scheduledTime" type="time" />
-        </label>
-
-        <button type="submit" class="full-width">Save Task</button>
-      </form>
-    </section>
-  `;
-
-  document.getElementById("add-task-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-
-    const formData = new FormData(event.currentTarget);
-    const scheduledDate = String(formData.get("scheduledDate") || "").trim();
-    const scheduledTime = String(formData.get("scheduledTime") || "").trim();
-    const scheduledFor = parseScheduledFor(scheduledDate, scheduledTime);
-
-    if ((scheduledDate || scheduledTime) && !scheduledFor) {
-      alert("Please provide a valid date/time.");
-      return;
-    }
-
-    const payload = {
-      title: String(formData.get("title") || "").trim(),
-      notes: String(formData.get("notes") || "").trim(),
-      contactId: String(formData.get("contactId") || "").trim() || null,
-      scheduledFor,
-      completed: false,
-      createdAt: Timestamp.now(),
-      updatedAt: serverTimestamp(),
-    };
-
-    if (!payload.title) {
-      alert("Title is required.");
-      return;
-    }
-
-    await addDoc(collection(db, "users", currentUser.uid, "tasks"), payload);
-    window.location.hash = "#tasks";
+  renderTaskForm({
+    mode: "create",
+    contacts,
+    values: {},
+    onSubmit: async (values) => {
+      await addDoc(collection(db, "users", currentUser.uid, "tasks"), {
+        ...values,
+        completed: false,
+        createdAt: Timestamp.now(),
+        updatedAt: serverTimestamp(),
+      });
+      window.location.hash = "#tasks";
+    },
   });
 }
 
@@ -904,12 +971,12 @@ async function renderTasksPage() {
                 .map((task) => {
                   const linkedContact = task.contactId ? contactById[task.contactId] : null;
                   return `
-                    <article class="panel feed-item">
+                    <button class="panel feed-item" data-task-id="${task.id}" type="button">
                       <h3>${task.title || "Untitled Task"}</h3>
                       <p><strong>Scheduled:</strong> ${task.scheduledFor ? formatDate(task.scheduledFor) : "No schedule"}</p>
                       <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
                       <p><strong>Status:</strong> ${task.completed ? "Completed" : "Active"}</p>
-                    </article>
+                    </button>
                   `;
                 })
                 .join("")
@@ -922,9 +989,143 @@ async function renderTasksPage() {
   document.getElementById("add-task-btn")?.addEventListener("click", () => {
     window.location.hash = "#tasks/new";
   });
+
+  viewContainer.querySelectorAll("[data-task-id]").forEach((taskEl) => {
+    taskEl.addEventListener("click", () => {
+      window.location.hash = `#task/${taskEl.dataset.taskId}`;
+    });
+  });
 }
 
-async function renderContactDetail(contactId) {
+async function renderTaskDetail(taskId, mode = "view") {
+  renderLoading("Loading task details...");
+
+  const taskRef = doc(db, "users", currentUser.uid, "tasks", taskId);
+  const [taskSnapshot, contactsSnapshot] = await Promise.all([
+    getDoc(taskRef),
+    getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
+  ]);
+
+  if (!taskSnapshot.exists()) {
+    viewContainer.innerHTML = '<p class="view-message">Task not found.</p>';
+    return;
+  }
+
+  const task = { id: taskSnapshot.id, ...taskSnapshot.data() };
+  const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+  const linkedContact = contacts.find((contact) => contact.id === task.contactId) || null;
+
+  if (mode === "edit") {
+    renderTaskForm({
+      mode: "edit",
+      contacts,
+      values: task,
+      onSubmit: async (values) => {
+        await updateDoc(taskRef, {
+          ...values,
+          updatedAt: serverTimestamp(),
+        });
+        await renderTaskDetail(taskId, "view");
+      },
+      onCancel: async () => {
+        await renderTaskDetail(taskId, "view");
+      },
+      onDelete: async () => {
+        await deleteDoc(taskRef);
+        window.location.hash = "#tasks";
+      },
+    });
+    return;
+  }
+
+  viewContainer.innerHTML = `
+    <section>
+      <div class="view-header">
+        <h2>${task.title || "Task Detail"}</h2>
+        <button id="edit-task-btn" type="button">Edit</button>
+      </div>
+      <div class="panel detail-grid">
+        <p><strong>Notes:</strong> ${task.notes || "-"}</p>
+        <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
+        <p><strong>Scheduled:</strong> ${task.scheduledFor ? formatDate(task.scheduledFor) : "No schedule"}</p>
+        <p><strong>Status:</strong> ${task.completed ? "Completed" : "Active"}</p>
+        <p><strong>Created:</strong> ${formatDate(task.createdAt)}</p>
+        <p><strong>Updated:</strong> ${formatDate(task.updatedAt)}</p>
+      </div>
+    </section>
+  `;
+
+  document.getElementById("edit-task-btn")?.addEventListener("click", () => {
+    renderTaskDetail(taskId, "edit");
+  });
+}
+
+async function renderLeadDetail(leadId, mode = "view") {
+  renderLoading("Loading lead details...");
+
+  const leadRef = doc(db, "users", currentUser.uid, "leads", leadId);
+  const [pipelineSettings, leadSnapshot, contactsSnapshot] = await Promise.all([
+    getPipelineSettings(currentUser.uid),
+    getDoc(leadRef),
+    getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
+  ]);
+
+  if (!leadSnapshot.exists()) {
+    viewContainer.innerHTML = '<p class="view-message">Lead not found.</p>';
+    return;
+  }
+
+  const lead = { id: leadSnapshot.id, ...leadSnapshot.data() };
+  const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+  const linkedContact = contacts.find((contact) => contact.id === lead.contactId) || null;
+
+  if (mode === "edit") {
+    renderLeadForm({
+      mode: "edit",
+      pipelineSettings,
+      contacts,
+      values: lead,
+      onSubmit: async (values) => {
+        await updateDoc(leadRef, {
+          ...values,
+          updatedAt: serverTimestamp(),
+        });
+        await renderLeadDetail(leadId, "view");
+      },
+      onCancel: async () => {
+        await renderLeadDetail(leadId, "view");
+      },
+      onDelete: async () => {
+        await deleteDoc(leadRef);
+        window.location.hash = "#dashboard";
+      },
+    });
+    return;
+  }
+
+  viewContainer.innerHTML = `
+    <section>
+      <div class="view-header">
+        <h2>Lead</h2>
+        <button id="edit-lead-btn" type="button">Edit</button>
+      </div>
+      <div class="panel detail-grid">
+        <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
+        <p><strong>Stage:</strong> ${getStageById(pipelineSettings, lead.stageId)?.label || lead.stageId || "-"}</p>
+        <p><strong>Status:</strong> ${lead.stageStatus || "pending"}</p>
+        <p><strong>Next Action:</strong> ${lead.nextActionAt ? formatDate(lead.nextActionAt) : "-"}</p>
+        <p><strong>Created:</strong> ${formatDate(lead.createdAt)}</p>
+        <p><strong>Updated:</strong> ${formatDate(lead.updatedAt)}</p>
+      </div>
+    </section>
+  `;
+
+  document.getElementById("edit-lead-btn")?.addEventListener("click", () => {
+    renderLeadDetail(leadId, "edit");
+  });
+}
+
+async function renderContactDetail(contactId, mode = "view") {
   renderLoading("Loading contact details...");
 
   const contactRef = doc(db, "users", currentUser.uid, "contacts", contactId);
@@ -940,6 +1141,29 @@ async function renderContactDetail(contactId) {
   }
 
   const contact = contactSnapshot.data();
+
+  if (mode === "edit") {
+    renderContactForm({
+      mode: "edit",
+      values: contact,
+      onSubmit: async (values) => {
+        await updateDoc(contactRef, {
+          ...values,
+          updatedAt: serverTimestamp(),
+        });
+        await renderContactDetail(contactId, "view");
+      },
+      onCancel: async () => {
+        await renderContactDetail(contactId, "view");
+      },
+      onDelete: async () => {
+        await deleteDoc(contactRef);
+        window.location.hash = "#contacts";
+      },
+    });
+    return;
+  }
+
   const notes = Array.isArray(contact.notes) ? contact.notes : [];
   const tasks = tasksSnapshot.docs.map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }));
   const stageLabel = getStageById(pipelineSettings, contact.stageId)?.label || contact.stage || "Unknown stage";
@@ -948,6 +1172,7 @@ async function renderContactDetail(contactId) {
     <section>
       <div class="view-header">
         <h2>${contact.name || "Contact Detail"}</h2>
+        <button id="edit-contact-btn" type="button">Edit</button>
       </div>
 
       <div class="panel detail-grid">
@@ -1006,6 +1231,10 @@ async function renderContactDetail(contactId) {
       </div>
     </section>
   `;
+
+  document.getElementById("edit-contact-btn")?.addEventListener("click", () => {
+    renderContactDetail(contactId, "edit");
+  });
 
   document.getElementById("add-note-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1121,6 +1350,16 @@ async function renderCurrentRoute() {
 
     if (route.page === "contact-detail" && route.contactId) {
       await renderContactDetail(route.contactId);
+      return;
+    }
+
+    if (route.page === "lead-detail" && route.leadId) {
+      await renderLeadDetail(route.leadId);
+      return;
+    }
+
+    if (route.page === "task-detail" && route.taskId) {
+      await renderTaskDetail(route.taskId);
       return;
     }
 
