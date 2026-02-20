@@ -1318,9 +1318,36 @@ async function renderTasksPage() {
     return acc;
   }, {});
 
-  const tasks = tasksSnapshot.docs
-    .map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }))
-    .sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0));
+  const allTasks = tasksSnapshot.docs.map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }));
+
+  const getTaskLastSavedTime = (task) =>
+    Math.max(toDate(task.updatedAt)?.getTime() || 0, toDate(task.createdAt)?.getTime() || 0);
+
+  const getTaskSortTime = (task) => {
+    const scheduledTime = toDate(task.scheduledFor)?.getTime();
+    if (scheduledTime) return scheduledTime;
+    return getTaskLastSavedTime(task);
+  };
+
+  const activeTasks = allTasks
+    .filter((task) => !task.completed)
+    .sort((a, b) => getTaskSortTime(b) - getTaskSortTime(a));
+
+  const completedTasks = allTasks
+    .filter((task) => task.completed)
+    .sort((a, b) => getTaskSortTime(b) - getTaskSortTime(a));
+
+  const renderTaskCard = (task) => {
+    const linkedContact = task.contactId ? contactById[task.contactId] : null;
+    return `
+      <button class="panel feed-item" data-task-id="${task.id}" type="button">
+        <h3>${task.title || "Untitled Task"}</h3>
+        <p><strong>Scheduled:</strong> ${task.scheduledFor ? formatDate(task.scheduledFor) : "No schedule"}</p>
+        <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
+        <p><strong>Status:</strong> ${task.completed ? "Completed" : "Active"}</p>
+      </button>
+    `;
+  };
 
   viewContainer.innerHTML = `
     <section>
@@ -1330,21 +1357,20 @@ async function renderTasksPage() {
       </div>
       <div class="feed-list">
         ${
-          tasks.length
-            ? tasks
-                .map((task) => {
-                  const linkedContact = task.contactId ? contactById[task.contactId] : null;
-                  return `
-                    <button class="panel feed-item" data-task-id="${task.id}" type="button">
-                      <h3>${task.title || "Untitled Task"}</h3>
-                      <p><strong>Scheduled:</strong> ${task.scheduledFor ? formatDate(task.scheduledFor) : "No schedule"}</p>
-                      <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
-                      <p><strong>Status:</strong> ${task.completed ? "Completed" : "Active"}</p>
-                    </button>
-                  `;
-                })
-                .join("")
-            : '<p class="view-message">No tasks yet.</p>'
+          activeTasks.length
+            ? activeTasks.map((task) => renderTaskCard(task)).join("")
+            : '<p class="view-message">No active tasks.</p>'
+        }
+
+        ${
+          completedTasks.length
+            ? `
+              <div class="tasks-divider" role="separator" aria-label="Completed Tasks section">
+                <h3>Completed Tasks</h3>
+              </div>
+              ${completedTasks.map((task) => renderTaskCard(task)).join("")}
+            `
+            : ""
         }
       </div>
     </section>

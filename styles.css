@@ -188,6 +188,18 @@ button:active {
   gap: 0.85rem;
 }
 
+.tasks-divider {
+  margin: 1rem 0 0.35rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+.tasks-divider h3 {
+  margin: 0;
+  font-size: 1rem;
+  opacity: 0.9;
+}
+
 .feed-item,
 .panel {
   width: 100%;
