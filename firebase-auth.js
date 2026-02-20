@@ -232,7 +232,7 @@ function formatDate(value) {
 
 function parseScheduledFor(dateString, timeString) {
   if (!dateString && !timeString) {
-    return Timestamp.now();
+    return null;
   }
 
   if (!dateString) {
@@ -255,6 +255,8 @@ function routeFromHash() {
   if (hash === "contacts") return { page: "contacts" };
   if (hash === "add-contact") return { page: "add-contact" };
   if (hash === "add-lead") return { page: "add-lead" };
+  if (hash === "tasks") return { page: "tasks" };
+  if (hash === "tasks/new") return { page: "add-task" };
   if (hash === "add-task") return { page: "add-task" };
   if (hash === "promotions") return { page: "promotions" };
   if (hash === "settings") return { page: "settings" };
@@ -831,12 +833,11 @@ async function renderAddTaskForm() {
     event.preventDefault();
 
     const formData = new FormData(event.currentTarget);
-    const scheduledFor = parseScheduledFor(
-      String(formData.get("scheduledDate") || "").trim(),
-      String(formData.get("scheduledTime") || "").trim()
-    );
+    const scheduledDate = String(formData.get("scheduledDate") || "").trim();
+    const scheduledTime = String(formData.get("scheduledTime") || "").trim();
+    const scheduledFor = parseScheduledFor(scheduledDate, scheduledTime);
 
-    if (!scheduledFor) {
+    if ((scheduledDate || scheduledTime) && !scheduledFor) {
       alert("Please provide a valid date/time.");
       return;
     }
@@ -847,7 +848,7 @@ async function renderAddTaskForm() {
       contactId: String(formData.get("contactId") || "").trim() || null,
       scheduledFor,
       completed: false,
-      createdAt: serverTimestamp(),
+      createdAt: Timestamp.now(),
       updatedAt: serverTimestamp(),
     };
 
@@ -857,7 +858,57 @@ async function renderAddTaskForm() {
     }
 
     await addDoc(collection(db, "users", currentUser.uid, "tasks"), payload);
-    window.location.hash = "#dashboard";
+    window.location.hash = "#tasks";
+  });
+}
+
+async function renderTasksPage() {
+  renderLoading("Loading tasks...");
+
+  const [contactsSnapshot, tasksSnapshot] = await Promise.all([
+    getDocs(collection(db, "users", currentUser.uid, "contacts")),
+    getDocs(collection(db, "users", currentUser.uid, "tasks")),
+  ]);
+
+  const contactById = contactsSnapshot.docs.reduce((acc, contactDoc) => {
+    acc[contactDoc.id] = { id: contactDoc.id, ...contactDoc.data() };
+    return acc;
+  }, {});
+
+  const tasks = tasksSnapshot.docs
+    .map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }))
+    .sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0));
+
+  viewContainer.innerHTML = `
+    <section>
+      <div class="view-header">
+        <h2>Tasks</h2>
+        <button id="add-task-btn" type="button">Add Task +</button>
+      </div>
+      <div class="feed-list">
+        ${
+          tasks.length
+            ? tasks
+                .map((task) => {
+                  const linkedContact = task.contactId ? contactById[task.contactId] : null;
+                  return `
+                    <article class="panel feed-item">
+                      <h3>${task.title || "Untitled Task"}</h3>
+                      <p><strong>Scheduled:</strong> ${task.scheduledFor ? formatDate(task.scheduledFor) : "No schedule"}</p>
+                      <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
+                      <p><strong>Status:</strong> ${task.completed ? "Completed" : "Active"}</p>
+                    </article>
+                  `;
+                })
+                .join("")
+            : '<p class="view-message">No tasks yet.</p>'
+        }
+      </div>
+    </section>
+  `;
+
+  document.getElementById("add-task-btn")?.addEventListener("click", () => {
+    window.location.hash = "#tasks/new";
   });
 }
 
@@ -1048,6 +1099,11 @@ async function renderCurrentRoute() {
 
     if (route.page === "add-task") {
       await renderAddTaskForm();
+      return;
+    }
+
+    if (route.page === "tasks") {
+      await renderTasksPage();
       return;
     }
 
