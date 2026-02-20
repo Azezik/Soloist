@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SoloistCRM Auth</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="auth-page">
+      <section class="auth-card" aria-labelledby="app-title">
+        <h1 id="app-title">SoloistCRM</h1>
+        <p class="subtext">Sign in or create an account to continue.</p>
+
+        <form id="auth-form" class="auth-form" novalidate>
+          <label for="email">Email</label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            autocomplete="email"
+            required
+            placeholder="you@example.com"
+          />
+
+          <label for="password">Password</label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+            minlength="6"
+            placeholder="••••••••"
+          />
+
+          <div class="button-row">
+            <button type="button" id="signup-btn">Sign Up</button>
+            <button type="button" id="login-btn">Login</button>
+          </div>
+        </form>
+
+        <p id="auth-status" class="status" role="status" aria-live="polite"></p>
+      </section>
+    </main>
+
+    <script type="module" src="firebase-auth.js"></script>
+  </body>
+</html>
