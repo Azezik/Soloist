@@ -238,18 +238,25 @@ button:active {
 }
 
 
-summary.secondary-btn {
+.button-row .dashboard-action-btn {
   border: 1px solid rgba(255, 255, 255, 0.45);
   background-color: rgba(255, 255, 255, 0.18);
   color: var(--white);
   border-radius: 10px;
   padding: 0.75rem 1rem;
   font-weight: 700;
+  font-size: 1rem;
+  min-height: 46px;
   cursor: pointer;
   text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  box-sizing: border-box;
 }
 
-summary.secondary-btn:hover {
+.button-row .dashboard-action-btn:hover {
   background-color: rgba(255, 255, 255, 0.3);
 }
 .push-menu {
