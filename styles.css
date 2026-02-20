@@ -291,3 +291,19 @@ button:active {
   text-align: left;
   padding: 0.55rem 0.7rem;
 }
+
+.lead-contact-suggestions {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.lead-contact-option {
+  width: 100%;
+  text-align: left;
+}
+
+.lead-contact-empty {
+  margin: 0;
+  opacity: 0.85;
+  font-size: 0.92rem;
+}

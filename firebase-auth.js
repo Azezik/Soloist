@@ -466,7 +466,7 @@ async function renderDashboard() {
         source: "leads",
         contactId: lead.contactId || null,
         title: contact.name || "Unnamed Contact",
-        subtitle: contact.product || "No product",
+        subtitle: contact.email || contact.phone || "No contact details",
         stageId: lead.stageId,
         dueAt: lead.nextActionAt,
       };
@@ -480,7 +480,7 @@ async function renderDashboard() {
       source: "contacts",
       contactId: contact.id,
       title: contact.name || "Unnamed Contact",
-      subtitle: contact.product || "No product",
+      subtitle: contact.email || contact.phone || "No contact details",
       stageId: contact.stageId,
       dueAt: contact.nextActionAt,
     };
@@ -707,8 +707,7 @@ async function renderDashboard() {
 async function renderContactsPage() {
   renderLoading("Loading contacts...");
 
-  const [pipelineSettings, contactsSnapshot, tasksSnapshot] = await Promise.all([
-    getPipelineSettings(currentUser.uid),
+  const [contactsSnapshot, tasksSnapshot] = await Promise.all([
     getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("createdAt", "desc"))),
     getDocs(collection(db, "users", currentUser.uid, "tasks")),
   ]);
@@ -722,8 +721,6 @@ async function renderContactsPage() {
     return acc;
   }, {});
 
-  const stageOptions = ["All", ...pipelineSettings.stages.map((stage) => stage.id)];
-
   viewContainer.innerHTML = `
     <section>
       <div class="view-header">
@@ -733,18 +730,7 @@ async function renderContactsPage() {
 
       <div class="panel filters-grid">
         <label>Search
-          <input id="contact-search" placeholder="Name, email, product" />
-        </label>
-
-        <label>Stage
-          <select id="stage-filter">
-            ${stageOptions
-              .map((stageId) => {
-                const label = stageId === "All" ? "All" : getStageById(pipelineSettings, stageId)?.label || stageId;
-                return `<option value="${stageId}">${label}</option>`;
-              })
-              .join("")}
-          </select>
+          <input id="contact-search" placeholder="Name, email, phone" />
         </label>
 
         <label>Task Filter
@@ -764,32 +750,27 @@ async function renderContactsPage() {
     const searchValue = String(document.getElementById("contact-search")?.value || "")
       .trim()
       .toLowerCase();
-    const stageValue = document.getElementById("stage-filter")?.value || "All";
     const taskFilter = document.getElementById("task-filter")?.value || "all";
 
     const filtered = contacts.filter((contact) => {
-      const haystack = `${contact.name || ""} ${contact.email || ""} ${contact.product || ""}`.toLowerCase();
+      const haystack = `${contact.name || ""} ${contact.email || ""} ${contact.phone || ""}`.toLowerCase();
       const matchesSearch = !searchValue || haystack.includes(searchValue);
-      const stageId = contact.stageId || pipelineSettings.stages[0]?.id;
-      const matchesStage = stageValue === "All" || stageId === stageValue;
-
       const hasTasks = Boolean(taskCountByContact[contact.id]);
       const matchesTaskFilter =
         taskFilter === "all" || (taskFilter === "with" ? hasTasks : !hasTasks);
 
-      return matchesSearch && matchesStage && matchesTaskFilter;
+      return matchesSearch && matchesTaskFilter;
     });
 
     const listEl = document.getElementById("contacts-list");
     listEl.innerHTML = filtered.length
       ? filtered
           .map((contact) => {
-            const stageLabel = getStageById(pipelineSettings, contact.stageId)?.label || contact.stage || "Unknown stage";
             return `
               <button class="panel feed-item" data-contact-id="${contact.id}" type="button">
                 <h3>${contact.name || "Unnamed Contact"}</h3>
                 <p>${contact.email || "No email"}</p>
-                <p>${stageLabel} · ${contact.status || "Open"}</p>
+                <p>${contact.phone || "No phone"}</p>
                 <p><strong>Tasks:</strong> ${taskCountByContact[contact.id] || 0}</p>
               </button>
             `;
@@ -804,7 +785,7 @@ async function renderContactsPage() {
     });
   }
 
-  ["contact-search", "stage-filter", "task-filter"].forEach((id) => {
+  ["contact-search", "task-filter"].forEach((id) => {
     document.getElementById(id)?.addEventListener("input", renderFilteredContacts);
     document.getElementById(id)?.addEventListener("change", renderFilteredContacts);
   });
@@ -837,8 +818,6 @@ function parseContactFormValues(formEl) {
     name: String(formData.get("name") || "").trim(),
     email: String(formData.get("email") || "").trim(),
     phone: String(formData.get("phone") || "").trim(),
-    product: String(formData.get("product") || "").trim(),
-    priceQuoted: String(formData.get("priceQuoted") || "").trim(),
   };
 }
 
@@ -852,8 +831,6 @@ function renderContactForm({ mode, values, onSubmit, onCancel, onDelete }) {
         <label>Name <input name="name" value="${values.name || ""}" required /></label>
         <label>Email <input name="email" type="email" value="${values.email || ""}" /></label>
         <label>Phone <input name="phone" type="tel" value="${values.phone || ""}" /></label>
-        <label>Product <input name="product" value="${values.product || ""}" /></label>
-        <label>Price Quoted <input name="priceQuoted" value="${values.priceQuoted || ""}" /></label>
 
         <div class="button-row full-width">
           <button type="submit">Save</button>
@@ -888,7 +865,10 @@ function parseLeadFormValues(formEl) {
   }
 
   return {
-    contactId: String(formData.get("contactId") || "").trim() || null,
+    selectedContactId: String(formData.get("selectedContactId") || "").trim() || null,
+    contactName: String(formData.get("contactName") || "").trim(),
+    contactEmail: String(formData.get("contactEmail") || "").trim(),
+    contactPhone: String(formData.get("contactPhone") || "").trim(),
     stageId: String(formData.get("stageId") || "").trim(),
     stageStatus: String(formData.get("stageStatus") || "pending").trim() || "pending",
     nextActionAt,
@@ -896,20 +876,35 @@ function parseLeadFormValues(formEl) {
 }
 
 function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, onCancel, onDelete }) {
+  const selectedContact = contacts.find((contact) => contact.id === values.contactId) || null;
+  const initialContactName = values.contactName || selectedContact?.name || "";
+  const initialContactEmail = values.contactEmail || selectedContact?.email || "";
+  const initialContactPhone = values.contactPhone || selectedContact?.phone || "";
+
   viewContainer.innerHTML = `
     <section>
       <div class="view-header">
         <h2>${mode === "create" ? "New Lead" : "Edit Lead"}</h2>
       </div>
       <form id="lead-form" class="panel form-grid">
-        <label>Contact
-          <select name="contactId">
-            <option value="">No contact</option>
-            ${contacts
-              .map((contact) => `<option value="${contact.id}" ${values.contactId === contact.id ? "selected" : ""}>${contact.name || contact.email || contact.id}</option>`)
-              .join("")}
-          </select>
+        <h3 class="full-width">Contact Info</h3>
+        <input type="hidden" name="selectedContactId" value="${values.contactId || ""}" />
+
+        <label>Name
+          <input name="contactName" id="lead-contact-name" value="${initialContactName}" required autocomplete="off" />
         </label>
+
+        <div id="lead-contact-suggestions" class="lead-contact-suggestions full-width"></div>
+
+        <label>Email
+          <input name="contactEmail" id="lead-contact-email" type="email" value="${initialContactEmail}" />
+        </label>
+
+        <label>Phone
+          <input name="contactPhone" id="lead-contact-phone" type="tel" value="${initialContactPhone}" />
+        </label>
+
+        <h3 class="full-width">Lead Info</h3>
 
         <label>Stage
           <select name="stageId">
@@ -941,12 +936,75 @@ function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, on
     </section>
   `;
 
-  document.getElementById("lead-form")?.addEventListener("submit", async (event) => {
+  const formEl = document.getElementById("lead-form");
+  const hiddenContactIdEl = formEl?.querySelector('input[name="selectedContactId"]');
+  const nameEl = document.getElementById("lead-contact-name");
+  const emailEl = document.getElementById("lead-contact-email");
+  const phoneEl = document.getElementById("lead-contact-phone");
+  const suggestionsEl = document.getElementById("lead-contact-suggestions");
+
+  function clearSelectedContact() {
+    if (!hiddenContactIdEl) return;
+    hiddenContactIdEl.value = "";
+  }
+
+  function applySelectedContact(contact) {
+    if (!hiddenContactIdEl || !nameEl || !emailEl || !phoneEl) return;
+    hiddenContactIdEl.value = contact.id;
+    nameEl.value = contact.name || "";
+    emailEl.value = contact.email || "";
+    phoneEl.value = contact.phone || "";
+    suggestionsEl.innerHTML = "";
+  }
+
+  function renderSuggestions(searchText) {
+    if (!suggestionsEl) return;
+    const normalized = searchText.trim().toLowerCase();
+    if (!normalized) {
+      suggestionsEl.innerHTML = "";
+      return;
+    }
+
+    const matches = contacts
+      .filter((contact) => (contact.name || "").toLowerCase().includes(normalized))
+      .slice(0, 5);
+
+    suggestionsEl.innerHTML = matches.length
+      ? matches
+          .map(
+            (contact) =>
+              `<button type="button" class="lead-contact-option" data-contact-option-id="${contact.id}">${contact.name || "Unnamed"} ${contact.email ? `· ${contact.email}` : ""}</button>`
+          )
+          .join("")
+      : '<p class="lead-contact-empty">No existing contacts matched. Saving will create a new contact.</p>';
+
+    suggestionsEl.querySelectorAll("[data-contact-option-id]").forEach((optionEl) => {
+      optionEl.addEventListener("click", () => {
+        const chosen = contacts.find((contact) => contact.id === optionEl.dataset.contactOptionId);
+        if (!chosen) return;
+        applySelectedContact(chosen);
+      });
+    });
+  }
+
+  nameEl?.addEventListener("input", () => {
+    clearSelectedContact();
+    renderSuggestions(nameEl.value);
+  });
+
+  emailEl?.addEventListener("input", clearSelectedContact);
+  phoneEl?.addEventListener("input", clearSelectedContact);
+
+  formEl?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       const payload = parseLeadFormValues(event.currentTarget);
       if (!payload.stageId) {
         alert("Stage is required.");
+        return;
+      }
+      if (!payload.contactName) {
+        alert("Contact name is required.");
         return;
       }
       await onSubmit(payload);
@@ -1032,8 +1090,6 @@ function renderTaskForm({ mode, contacts, values, onSubmit, onCancel, onDelete }
 
 async function renderAddContactForm() {
   renderLoading("Loading contact form...");
-  const pipelineSettings = await getPipelineSettings(currentUser.uid);
-  const firstStageId = pipelineSettings.stages[0]?.id || "stage1";
 
   renderContactForm({
     mode: "create",
@@ -1042,15 +1098,11 @@ async function renderAddContactForm() {
       const now = Timestamp.now();
       await addDoc(collection(db, "users", currentUser.uid, "contacts"), {
         ...values,
-        stageId: firstStageId,
-        status: "Open",
         createdAt: now,
-        nextActionAt: now,
-        lastActionAt: now,
         updatedAt: serverTimestamp(),
         notes: [],
       });
-      window.location.hash = "#dashboard";
+      window.location.hash = "#contacts";
     },
   });
 }
@@ -1071,8 +1123,25 @@ async function renderAddLeadForm() {
     values: { stageId: firstStageId, stageStatus: "pending", nextActionAt: Timestamp.now() },
     onSubmit: async (values) => {
       const now = Timestamp.now();
+      let contactId = values.selectedContactId;
+
+      if (!contactId) {
+        const createdContact = await addDoc(collection(db, "users", currentUser.uid, "contacts"), {
+          name: values.contactName,
+          email: values.contactEmail,
+          phone: values.contactPhone,
+          createdAt: now,
+          updatedAt: serverTimestamp(),
+          notes: [],
+        });
+        contactId = createdContact.id;
+      }
+
       await addDoc(collection(db, "users", currentUser.uid, "leads"), {
-        ...values,
+        contactId,
+        stageId: values.stageId,
+        stageStatus: values.stageStatus || "pending",
+        nextActionAt: values.nextActionAt,
         createdAt: now,
         updatedAt: serverTimestamp(),
       });
@@ -1298,15 +1367,43 @@ async function renderEditLeadForm(leadId) {
 
   const lead = { id: leadSnapshot.id, ...leadSnapshot.data() };
   const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+  const linkedContact = contacts.find((contact) => contact.id === lead.contactId) || null;
 
   renderLeadForm({
     mode: "edit",
     pipelineSettings,
     contacts,
-    values: lead,
+    values: {
+      ...lead,
+      contactName: linkedContact?.name || "",
+      contactEmail: linkedContact?.email || "",
+      contactPhone: linkedContact?.phone || "",
+    },
     onSubmit: async (values) => {
+      if (lead.contactId) {
+        const contactRef = doc(db, "users", currentUser.uid, "contacts", lead.contactId);
+        const existingName = linkedContact?.name || "";
+        const existingEmail = linkedContact?.email || "";
+        const existingPhone = linkedContact?.phone || "";
+        const contactChanged =
+          values.contactName !== existingName ||
+          values.contactEmail !== existingEmail ||
+          values.contactPhone !== existingPhone;
+
+        if (contactChanged) {
+          await updateDoc(contactRef, {
+            name: values.contactName,
+            email: values.contactEmail,
+            phone: values.contactPhone,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+
       await updateDoc(leadRef, {
-        ...values,
+        stageId: values.stageId,
+        stageStatus: values.stageStatus || "pending",
+        nextActionAt: values.nextActionAt,
         updatedAt: serverTimestamp(),
       });
       window.location.hash = `#lead/${leadId}`;
@@ -1325,8 +1422,7 @@ async function renderContactDetail(contactId) {
   renderLoading("Loading contact details...");
 
   const contactRef = doc(db, "users", currentUser.uid, "contacts", contactId);
-  const [pipelineSettings, contactSnapshot, tasksSnapshot] = await Promise.all([
-    getPipelineSettings(currentUser.uid),
+  const [contactSnapshot, tasksSnapshot] = await Promise.all([
     getDoc(contactRef),
     getDocs(query(collection(db, "users", currentUser.uid, "tasks"), where("contactId", "==", contactId))),
   ]);
@@ -1340,7 +1436,6 @@ async function renderContactDetail(contactId) {
 
   const notes = Array.isArray(contact.notes) ? contact.notes : [];
   const tasks = tasksSnapshot.docs.map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }));
-  const stageLabel = getStageById(pipelineSettings, contact.stageId)?.label || contact.stage || "Unknown stage";
 
   viewContainer.innerHTML = `
     <section>
@@ -1352,12 +1447,6 @@ async function renderContactDetail(contactId) {
       <div class="panel detail-grid">
         <p><strong>Email:</strong> ${contact.email || "-"}</p>
         <p><strong>Phone:</strong> ${contact.phone || "-"}</p>
-        <p><strong>Product:</strong> ${contact.product || "-"}</p>
-        <p><strong>Price Quoted:</strong> ${contact.priceQuoted || "-"}</p>
-        <p><strong>Status:</strong> ${contact.status || "Open"}</p>
-        <p><strong>Stage:</strong> ${stageLabel}</p>
-        <p><strong>Next Action:</strong> ${formatDate(contact.nextActionAt)}</p>
-        <p><strong>Last Action:</strong> ${formatDate(contact.lastActionAt)}</p>
         <p><strong>Created:</strong> ${formatDate(contact.createdAt)}</p>
         <p><strong>Updated:</strong> ${formatDate(contact.updatedAt)}</p>
       </div>
