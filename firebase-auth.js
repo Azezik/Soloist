@@ -1021,7 +1021,18 @@ function parseTaskFormValues(formEl) {
   const formData = new FormData(formEl);
   const scheduledDate = String(formData.get("scheduledDate") || "").trim();
   const scheduledTime = String(formData.get("scheduledTime") || "").trim();
-  const scheduledFor = parseScheduledFor(scheduledDate, scheduledTime);
+  const hasDate = Boolean(scheduledDate);
+  const hasTime = Boolean(scheduledTime);
+
+  let scheduledFor = null;
+  if (!hasDate && !hasTime) {
+    scheduledFor = Timestamp.now();
+  } else {
+    const now = new Date();
+    const resolvedDate = hasDate ? scheduledDate : dateInputValue(now);
+    const resolvedTime = hasTime ? scheduledTime : timeInputValue(now);
+    scheduledFor = parseScheduledFor(resolvedDate, resolvedTime);
+  }
 
   if ((scheduledDate || scheduledTime) && !scheduledFor) {
     throw new Error("Please provide a valid date/time.");
