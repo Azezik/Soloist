@@ -1,16 +1,20 @@
 # Firestore security rules for SoloistCRM
 
-If your app can log in but fails with `FirebaseError: Missing or insufficient permissions`, your current Firestore rules are blocking all reads/writes.
+If your app can log in but fails with `FirebaseError: Missing or insufficient permissions`, your current Firestore rules are blocking reads/writes.
 
 ## Recommended starter rules
 
-Use these rules so each authenticated user can access only their own lead documents:
+Use these rules so each authenticated user can access only their own contacts and tasks:
 
 ```txt
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{userId}/leads/{leadId} {
+    match /users/{userId}/contacts/{contactId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /users/{userId}/tasks/{taskId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
   }
@@ -21,10 +25,12 @@ service cloud.firestore {
 
 The app reads/writes at:
 
-- `users/{currentUser.uid}/leads` (dashboard list + add lead)
-- `users/{currentUser.uid}/leads/{leadId}` (lead detail + notes)
+- `users/{currentUser.uid}/contacts`
+- `users/{currentUser.uid}/contacts/{contactId}`
+- `users/{currentUser.uid}/tasks`
+- `users/{currentUser.uid}/tasks/{taskId}`
 
-So rules must explicitly allow that path for the signed-in user's UID.
+So rules must explicitly allow those paths for the signed-in user's UID.
 
 ## Optional: protect user profile docs too
 
