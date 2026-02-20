@@ -236,3 +236,51 @@ button:active {
 .note-list li {
   margin-bottom: 0.75rem;
 }
+
+
+summary.secondary-btn {
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background-color: rgba(255, 255, 255, 0.18);
+  color: var(--white);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+}
+
+summary.secondary-btn:hover {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+.push-menu {
+  position: relative;
+  flex: 1;
+}
+
+.push-menu summary {
+  list-style: none;
+}
+
+.push-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.push-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  min-width: 220px;
+  display: grid;
+  gap: 0.35rem;
+  background: rgba(7, 32, 14, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 10px;
+  padding: 0.45rem;
+  z-index: 2;
+}
+
+.push-option {
+  width: 100%;
+  text-align: left;
+  padding: 0.55rem 0.7rem;
+}
