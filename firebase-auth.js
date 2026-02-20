@@ -577,7 +577,6 @@ async function renderDashboard() {
                 <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
                 <div class="button-row">
                   <button type="button" class="dashboard-action-btn" data-lead-action="done" data-lead-source="${item.source}" data-lead-id="${item.id}">Done</button>
-                  <button type="button" class="dashboard-action-btn" data-note-save="lead" data-note-source="${item.source}" data-note-id="${item.id}" data-note-contact-id="${item.contactId || ""}">Save Note</button>
                   <details class="push-menu">
                     <summary class="dashboard-action-btn">Push</summary>
                     <div class="push-dropdown" data-push-source="${item.source}" data-push-entity="lead" data-push-id="${item.id}">
@@ -585,7 +584,6 @@ async function renderDashboard() {
                     </div>
                   </details>
                 </div>
-                <textarea class="dashboard-note-input" data-note-input="lead" data-note-id="${item.id}" placeholder="Log interaction note..."></textarea>
               </article>
             `;
           }
@@ -598,8 +596,7 @@ async function renderDashboard() {
               <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
               ${item.notes ? `<p>${item.notes}</p>` : ""}
               <div class="button-row">
-                <button type="button" class="dashboard-action-btn" data-task-action="done" data-task-id="${item.id}" data-note-contact-id="${item.contactId || ""}">Done</button>
-                <button type="button" class="dashboard-action-btn" data-note-save="task" data-note-id="${item.id}" data-note-contact-id="${item.contactId || ""}">Save Note</button>
+                <button type="button" class="dashboard-action-btn" data-task-action="done" data-task-id="${item.id}">Done</button>
                 <details class="push-menu">
                   <summary class="dashboard-action-btn">Push</summary>
                   <div class="push-dropdown" data-push-entity="task" data-push-id="${item.id}">
@@ -607,7 +604,6 @@ async function renderDashboard() {
                   </div>
                 </details>
               </div>
-              <textarea class="dashboard-note-input" data-note-input="task" data-note-id="${item.id}" placeholder="Log interaction note..."></textarea>
             </article>
           `;
         })
@@ -730,29 +726,6 @@ async function renderDashboard() {
         updatedAt: serverTimestamp(),
       });
       await renderDashboard();
-    });
-  });
-
-
-  viewContainer.querySelectorAll("[data-note-save]").forEach((buttonEl) => {
-    buttonEl.addEventListener("click", async () => {
-      const parentType = buttonEl.dataset.noteSave;
-      const parentId = buttonEl.dataset.noteId;
-      const contactId = buttonEl.dataset.noteContactId || null;
-      if (!parentType || !parentId) return;
-
-      const noteInput = viewContainer.querySelector(`[data-note-input="${parentType}"][data-note-id="${parentId}"]`);
-      const noteText = String(noteInput?.value || "").trim();
-      if (!noteText) return;
-
-      await addTimelineNote({
-        contactId,
-        parentType,
-        parentId,
-        noteText,
-      });
-
-      if (noteInput) noteInput.value = "";
     });
   });
 
