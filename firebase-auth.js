@@ -19,7 +19,6 @@ import {
   serverTimestamp,
   setDoc,
   updateDoc,
-  arrayUnion,
   Timestamp,
   where,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
@@ -349,6 +348,33 @@ function formatDate(value) {
   return date.toLocaleString();
 }
 
+function normalizeBoolean(value) {
+  return value === true;
+}
+
+function buildTimelineEventFields(type, values = {}) {
+  return {
+    type,
+    contactId: values.contactId || null,
+    status: String(values.status || "open"),
+    archived: normalizeBoolean(values.archived),
+  };
+}
+
+async function addTimelineNote({ contactId = null, parentType = "contact", parentId = null, noteText = "" }) {
+  const trimmed = String(noteText || "").trim();
+  if (!trimmed) return;
+
+  await addDoc(collection(db, "users", currentUser.uid, "notes"), {
+    contactId,
+    parentType,
+    parentId,
+    noteText: trimmed,
+    createdAt: Timestamp.now(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
 function parseScheduledFor(dateString, timeString) {
   if (!dateString && !timeString) {
     return null;
@@ -526,6 +552,7 @@ async function renderDashboard() {
                 <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
                 <div class="button-row">
                   <button type="button" class="dashboard-action-btn" data-lead-action="done" data-lead-source="${item.source}" data-lead-id="${item.id}">Done</button>
+                  <button type="button" class="dashboard-action-btn" data-note-save="lead" data-note-source="${item.source}" data-note-id="${item.id}" data-note-contact-id="${item.contactId || ""}">Save Note</button>
                   <details class="push-menu">
                     <summary class="dashboard-action-btn">Push</summary>
                     <div class="push-dropdown" data-push-source="${item.source}" data-push-entity="lead" data-push-id="${item.id}">
@@ -533,6 +560,7 @@ async function renderDashboard() {
                     </div>
                   </details>
                 </div>
+                <textarea class="dashboard-note-input" data-note-input="lead" data-note-id="${item.id}" placeholder="Log interaction note..."></textarea>
               </article>
             `;
           }
@@ -545,7 +573,8 @@ async function renderDashboard() {
               <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
               ${item.notes ? `<p>${item.notes}</p>` : ""}
               <div class="button-row">
-                <button type="button" class="dashboard-action-btn" data-task-action="done" data-task-id="${item.id}">Done</button>
+                <button type="button" class="dashboard-action-btn" data-task-action="done" data-task-id="${item.id}" data-note-contact-id="${item.contactId || ""}">Done</button>
+                <button type="button" class="dashboard-action-btn" data-note-save="task" data-note-id="${item.id}" data-note-contact-id="${item.contactId || ""}">Save Note</button>
                 <details class="push-menu">
                   <summary class="dashboard-action-btn">Push</summary>
                   <div class="push-dropdown" data-push-entity="task" data-push-id="${item.id}">
@@ -553,6 +582,7 @@ async function renderDashboard() {
                   </div>
                 </details>
               </div>
+              <textarea class="dashboard-note-input" data-note-input="task" data-note-id="${item.id}" placeholder="Log interaction note..."></textarea>
             </article>
           `;
         })
@@ -629,13 +659,16 @@ async function renderDashboard() {
         if (leadSource === "leads") {
           await updateDoc(leadRef, {
             stageStatus: "completed",
+            status: "closed",
+            archived: true,
             nextActionAt: null,
             lastActionAt: Timestamp.fromDate(nowDate),
             updatedAt: serverTimestamp(),
           });
         } else {
           await updateDoc(leadRef, {
-            status: "Closed",
+            status: "closed",
+            archived: true,
             nextActionAt: null,
             lastActionAt: Timestamp.fromDate(nowDate),
             updatedAt: serverTimestamp(),
@@ -651,7 +684,7 @@ async function renderDashboard() {
 
       await updateDoc(leadRef, {
         stageId: nextStage.id,
-        ...(leadSource === "leads" ? { stageStatus: "pending" } : {}),
+        ...(leadSource === "leads" ? { stageStatus: "pending", status: "open", archived: false } : {}),
         lastActionAt: Timestamp.fromDate(nowDate),
         nextActionAt,
         updatedAt: serverTimestamp(),
@@ -667,9 +700,34 @@ async function renderDashboard() {
 
       await updateDoc(doc(db, "users", currentUser.uid, "tasks", taskId), {
         completed: true,
+        status: "completed",
+        archived: true,
         updatedAt: serverTimestamp(),
       });
       await renderDashboard();
+    });
+  });
+
+
+  viewContainer.querySelectorAll("[data-note-save]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", async () => {
+      const parentType = buttonEl.dataset.noteSave;
+      const parentId = buttonEl.dataset.noteId;
+      const contactId = buttonEl.dataset.noteContactId || null;
+      if (!parentType || !parentId) return;
+
+      const noteInput = viewContainer.querySelector(`[data-note-input="${parentType}"][data-note-id="${parentId}"]`);
+      const noteText = String(noteInput?.value || "").trim();
+      if (!noteText) return;
+
+      await addTimelineNote({
+        contactId,
+        parentType,
+        parentId,
+        noteText,
+      });
+
+      if (noteInput) noteInput.value = "";
     });
   });
 
@@ -873,6 +931,7 @@ function parseLeadFormValues(formEl) {
     stageId: String(formData.get("stageId") || "").trim(),
     stageStatus: String(formData.get("stageStatus") || "pending").trim() || "pending",
     nextActionAt,
+    initialNote: String(formData.get("initialNote") || "").trim(),
   };
 }
 
@@ -892,7 +951,7 @@ function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, on
         <input type="hidden" name="selectedContactId" value="${values.contactId || ""}" />
 
         <label>Name
-          <input name="contactName" id="lead-contact-name" value="${initialContactName}" required autocomplete="off" />
+          <input name="contactName" id="lead-contact-name" value="${initialContactName}" autocomplete="off" />
         </label>
 
         <div id="lead-contact-suggestions" class="lead-contact-suggestions full-width"></div>
@@ -927,6 +986,10 @@ function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, on
 
         <label>Next Action Time
           <input name="nextActionTime" type="time" value="${timeInputValue(values.nextActionAt)}" />
+        </label>
+
+        <label class="full-width">Initial Note (Optional)
+          <textarea name="initialNote" rows="3">${values.initialNote || ""}</textarea>
         </label>
 
         <div class="button-row full-width">
@@ -1002,10 +1065,6 @@ function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, on
       const payload = parseLeadFormValues(event.currentTarget);
       if (!payload.stageId) {
         alert("Stage is required.");
-        return;
-      }
-      if (!payload.contactName) {
-        alert("Contact name is required.");
         return;
       }
       await onSubmit(payload);
@@ -1112,7 +1171,6 @@ async function renderAddContactForm() {
         ...values,
         createdAt: now,
         updatedAt: serverTimestamp(),
-        notes: [],
       });
       window.location.hash = "#contacts";
     },
@@ -1135,28 +1193,43 @@ async function renderAddLeadForm() {
     values: { stageId: firstStageId, stageStatus: "pending", nextActionAt: Timestamp.now() },
     onSubmit: async (values) => {
       const now = Timestamp.now();
-      let contactId = values.selectedContactId;
+      let contactId = values.selectedContactId || null;
 
-      if (!contactId) {
+      if (!contactId && values.contactName) {
         const createdContact = await addDoc(collection(db, "users", currentUser.uid, "contacts"), {
           name: values.contactName,
           email: values.contactEmail,
           phone: values.contactPhone,
           createdAt: now,
           updatedAt: serverTimestamp(),
-          notes: [],
         });
         contactId = createdContact.id;
       }
 
-      await addDoc(collection(db, "users", currentUser.uid, "leads"), {
-        contactId,
+      const leadPayload = {
+        ...buildTimelineEventFields("lead", {
+          contactId,
+          status: values.stageStatus || "pending",
+          archived: values.stageStatus === "completed",
+        }),
+        title: values.contactName || "Lead",
+        summary: values.initialNote || "",
         stageId: values.stageId,
         stageStatus: values.stageStatus || "pending",
         nextActionAt: values.nextActionAt,
         createdAt: now,
         updatedAt: serverTimestamp(),
-      });
+      };
+
+      const leadDoc = await addDoc(collection(db, "users", currentUser.uid, "leads"), leadPayload);
+      if (values.initialNote) {
+        await addTimelineNote({
+          contactId,
+          parentType: "lead",
+          parentId: leadDoc.id,
+          noteText: values.initialNote,
+        });
+      }
       window.location.hash = "#dashboard";
     },
   });
@@ -1176,10 +1249,17 @@ async function renderAddTaskForm() {
     contacts,
     values: {},
     onSubmit: async (values) => {
+      const now = Timestamp.now();
       await addDoc(collection(db, "users", currentUser.uid, "tasks"), {
+        ...buildTimelineEventFields("task", {
+          contactId: values.contactId,
+          status: "open",
+          archived: false,
+        }),
         ...values,
         completed: false,
-        createdAt: Timestamp.now(),
+        summary: values.notes || "",
+        createdAt: now,
         updatedAt: serverTimestamp(),
       });
       window.location.hash = "#tasks";
@@ -1305,9 +1385,10 @@ async function renderTaskDetail(taskId) {
   renderLoading("Loading task details...");
 
   const taskRef = doc(db, "users", currentUser.uid, "tasks", taskId);
-  const [taskSnapshot, contactsSnapshot] = await Promise.all([
+  const [taskSnapshot, contactsSnapshot, taskNotesSnapshot] = await Promise.all([
     getDoc(taskRef),
     getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
+    getDocs(query(collection(db, "users", currentUser.uid, "notes"), where("parentType", "==", "task"))),
   ]);
 
   if (!taskSnapshot.exists()) {
@@ -1318,6 +1399,10 @@ async function renderTaskDetail(taskId) {
   const task = { id: taskSnapshot.id, ...taskSnapshot.data() };
   const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
   const linkedContact = contacts.find((contact) => contact.id === task.contactId) || null;
+  const taskNotes = taskNotesSnapshot.docs
+    .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
+    .filter((entry) => entry.parentId === taskId)
+    .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
 
   viewContainer.innerHTML = `
     <section>
@@ -1326,18 +1411,61 @@ async function renderTaskDetail(taskId) {
         <button id="edit-task-btn" type="button">Edit</button>
       </div>
       <div class="panel detail-grid">
-        <p><strong>Notes:</strong> ${task.notes || "-"}</p>
         <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
         <p><strong>Scheduled:</strong> ${task.scheduledFor ? formatDate(task.scheduledFor) : "No schedule"}</p>
         <p><strong>Status:</strong> ${task.completed ? "Completed" : "Active"}</p>
         <p><strong>Created:</strong> ${formatDate(task.createdAt)}</p>
         <p><strong>Updated:</strong> ${formatDate(task.updatedAt)}</p>
       </div>
+      <div class="panel notes-panel">
+        <h3>Task Notes</h3>
+        <ul class="note-list">
+          ${taskNotes.length ? taskNotes.map((entry) => `<li><p>${entry.noteText}</p><small>${formatDate(entry.createdAt)}</small></li>`).join("") : "<li>No notes yet.</li>"}
+        </ul>
+        <form id="task-note-form" class="form-grid">
+          <label class="full-width">Add Note
+            <textarea name="noteText" rows="3"></textarea>
+          </label>
+          <div class="button-row full-width">
+            <button type="submit">Save Note</button>
+            <button type="button" id="task-mark-done-btn" class="secondary-btn">Mark Done</button>
+          </div>
+        </form>
+      </div>
     </section>
   `;
 
   document.getElementById("edit-task-btn")?.addEventListener("click", () => {
     window.location.hash = `#task/${taskId}/edit`;
+  });
+
+  document.getElementById("task-note-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const noteText = String(new FormData(event.currentTarget).get("noteText") || "").trim();
+    if (!noteText) return;
+
+    await addTimelineNote({
+      contactId: task.contactId || null,
+      parentType: "task",
+      parentId: taskId,
+      noteText,
+    });
+
+    await updateDoc(taskRef, {
+      updatedAt: serverTimestamp(),
+    });
+
+    await renderTaskDetail(taskId);
+  });
+
+  document.getElementById("task-mark-done-btn")?.addEventListener("click", async () => {
+    await updateDoc(taskRef, {
+      completed: true,
+      status: "completed",
+      archived: true,
+      updatedAt: serverTimestamp(),
+    });
+    await renderTaskDetail(taskId);
   });
 }
 
@@ -1365,6 +1493,10 @@ async function renderEditTaskForm(taskId) {
     onSubmit: async (values) => {
       await updateDoc(taskRef, {
         ...values,
+        contactId: values.contactId || null,
+        status: values.completed ? "completed" : "open",
+        archived: values.completed === true,
+        summary: values.notes || "",
         updatedAt: serverTimestamp(),
       });
       window.location.hash = `#task/${taskId}`;
@@ -1373,7 +1505,11 @@ async function renderEditTaskForm(taskId) {
       window.location.hash = `#task/${taskId}`;
     },
     onDelete: async () => {
-      await deleteDoc(taskRef);
+      await updateDoc(taskRef, {
+        archived: true,
+        status: "archived",
+        updatedAt: serverTimestamp(),
+      });
       window.location.hash = "#tasks";
     },
   });
@@ -1383,10 +1519,12 @@ async function renderLeadDetail(leadId) {
   renderLoading("Loading lead details...");
 
   const leadRef = doc(db, "users", currentUser.uid, "leads", leadId);
-  const [pipelineSettings, leadSnapshot, contactsSnapshot] = await Promise.all([
+  const [pipelineSettings, leadSnapshot, contactsSnapshot, leadTasksSnapshot, leadNotesSnapshot] = await Promise.all([
     getPipelineSettings(currentUser.uid),
     getDoc(leadRef),
     getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
+    getDocs(collection(db, "users", currentUser.uid, "tasks")),
+    getDocs(query(collection(db, "users", currentUser.uid, "notes"), where("parentType", "==", "lead"))),
   ]);
 
   if (!leadSnapshot.exists()) {
@@ -1397,6 +1535,14 @@ async function renderLeadDetail(leadId) {
   const lead = { id: leadSnapshot.id, ...leadSnapshot.data() };
   const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
   const linkedContact = contacts.find((contact) => contact.id === lead.contactId) || null;
+  const relatedTasks = leadTasksSnapshot.docs
+    .map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }))
+    .filter((task) => (lead.contactId ? task.contactId === lead.contactId : task.leadId === leadId))
+    .sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0));
+  const leadNotes = leadNotesSnapshot.docs
+    .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
+    .filter((entry) => entry.parentId === leadId)
+    .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
 
   viewContainer.innerHTML = `
     <section>
@@ -1407,16 +1553,63 @@ async function renderLeadDetail(leadId) {
       <div class="panel detail-grid">
         <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
         <p><strong>Stage:</strong> ${getStageById(pipelineSettings, lead.stageId)?.label || lead.stageId || "-"}</p>
-        <p><strong>Status:</strong> ${lead.stageStatus || "pending"}</p>
+        <p><strong>Status:</strong> ${lead.stageStatus || lead.status || "pending"}</p>
         <p><strong>Next Action:</strong> ${lead.nextActionAt ? formatDate(lead.nextActionAt) : "-"}</p>
         <p><strong>Created:</strong> ${formatDate(lead.createdAt)}</p>
         <p><strong>Updated:</strong> ${formatDate(lead.updatedAt)}</p>
+      </div>
+
+      <div class="panel notes-panel">
+        <h3>Associated Tasks</h3>
+        <ul class="note-list">
+          ${relatedTasks.length ? relatedTasks.map((task) => `<li><p><strong>${task.title || "Untitled Task"}</strong> · ${task.completed ? "Completed" : "Active"}</p><small>${formatDate(task.scheduledFor)}</small></li>`).join("") : "<li>No tasks linked to this lead.</li>"}
+        </ul>
+
+        <h3>Lead Notes</h3>
+        <ul class="note-list">
+          ${leadNotes.length ? leadNotes.map((entry) => `<li><p>${entry.noteText}</p><small>${formatDate(entry.createdAt)}</small></li>`).join("") : "<li>No notes yet.</li>"}
+        </ul>
+
+        <form id="lead-note-form" class="form-grid">
+          <label class="full-width">Add Note
+            <textarea name="noteText" rows="3"></textarea>
+          </label>
+          <div class="button-row full-width">
+            <button type="submit">Save Note</button>
+            <button type="button" id="lead-close-btn" class="secondary-btn">Done / Close Lead</button>
+          </div>
+        </form>
       </div>
     </section>
   `;
 
   document.getElementById("edit-lead-btn")?.addEventListener("click", () => {
     window.location.hash = `#lead/${leadId}/edit`;
+  });
+
+  document.getElementById("lead-note-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const noteText = String(new FormData(event.currentTarget).get("noteText") || "").trim();
+    if (!noteText) return;
+    await addTimelineNote({
+      contactId: lead.contactId || null,
+      parentType: "lead",
+      parentId: leadId,
+      noteText,
+    });
+    await updateDoc(leadRef, { updatedAt: serverTimestamp() });
+    await renderLeadDetail(leadId);
+  });
+
+  document.getElementById("lead-close-btn")?.addEventListener("click", async () => {
+    await updateDoc(leadRef, {
+      stageStatus: "completed",
+      status: "closed",
+      archived: true,
+      nextActionAt: null,
+      updatedAt: serverTimestamp(),
+    });
+    await renderLeadDetail(leadId);
   });
 }
 
@@ -1471,6 +1664,12 @@ async function renderEditLeadForm(leadId) {
       }
 
       await updateDoc(leadRef, {
+        ...buildTimelineEventFields("lead", {
+          contactId: lead.contactId || null,
+          status: values.stageStatus || "pending",
+          archived: values.stageStatus === "completed",
+        }),
+        title: values.contactName || lead.title || "Lead",
         stageId: values.stageId,
         stageStatus: values.stageStatus || "pending",
         nextActionAt: values.nextActionAt,
@@ -1482,7 +1681,11 @@ async function renderEditLeadForm(leadId) {
       window.location.hash = `#lead/${leadId}`;
     },
     onDelete: async () => {
-      await deleteDoc(leadRef);
+      await updateDoc(leadRef, {
+        archived: true,
+        status: "archived",
+        updatedAt: serverTimestamp(),
+      });
       window.location.hash = "#dashboard";
     },
   });
@@ -1492,9 +1695,11 @@ async function renderContactDetail(contactId) {
   renderLoading("Loading contact details...");
 
   const contactRef = doc(db, "users", currentUser.uid, "contacts", contactId);
-  const [contactSnapshot, tasksSnapshot] = await Promise.all([
+  const [contactSnapshot, tasksSnapshot, leadsSnapshot, notesSnapshot] = await Promise.all([
     getDoc(contactRef),
     getDocs(query(collection(db, "users", currentUser.uid, "tasks"), where("contactId", "==", contactId))),
+    getDocs(query(collection(db, "users", currentUser.uid, "leads"), where("contactId", "==", contactId))),
+    getDocs(query(collection(db, "users", currentUser.uid, "notes"), where("contactId", "==", contactId))),
   ]);
 
   if (!contactSnapshot.exists()) {
@@ -1503,9 +1708,15 @@ async function renderContactDetail(contactId) {
   }
 
   const contact = contactSnapshot.data();
-
-  const notes = Array.isArray(contact.notes) ? contact.notes : [];
   const tasks = tasksSnapshot.docs.map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }));
+  const leads = leadsSnapshot.docs.map((leadDoc) => ({ id: leadDoc.id, ...leadDoc.data() }));
+  const notes = notesSnapshot.docs.map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }));
+
+  const timeline = [
+    ...leads.map((lead) => ({ kind: "lead", when: lead.createdAt, label: `Lead ${lead.archived ? "Closed" : "Created"}`, detail: lead.title || lead.summary || "Lead activity", href: `#lead/${lead.id}` })),
+    ...tasks.map((task) => ({ kind: "task", when: task.createdAt, label: `Task ${task.completed ? "Completed" : "Created"}`, detail: task.title || "Task activity", href: `#task/${task.id}` })),
+    ...notes.map((note) => ({ kind: "note", when: note.createdAt, label: "Note", detail: note.noteText, href: null })),
+  ].sort((a, b) => (toDate(a.when)?.getTime() || 0) - (toDate(b.when)?.getTime() || 0));
 
   viewContainer.innerHTML = `
     <section>
@@ -1522,37 +1733,9 @@ async function renderContactDetail(contactId) {
       </div>
 
       <div class="panel notes-panel">
-        <h3>Tasks</h3>
+        <h3>Timeline</h3>
         <ul class="note-list">
-          ${
-            tasks.length
-              ? tasks
-                  .sort((a, b) => (toDate(a.scheduledFor)?.getTime() || 0) - (toDate(b.scheduledFor)?.getTime() || 0))
-                  .map(
-                    (task) => `<li>
-                      <p><strong>${task.title || "Untitled Task"}</strong> · ${task.completed ? "Completed" : "Active"}</p>
-                      <small>${formatDate(task.scheduledFor)}${task.notes ? ` · ${task.notes}` : ""}</small>
-                    </li>`
-                  )
-                  .join("")
-              : "<li>No tasks linked to this contact.</li>"
-          }
-        </ul>
-
-        <h3>Notes</h3>
-        <ul class="note-list">
-          ${
-            notes.length
-              ? notes
-                  .map(
-                    (entry) => `<li>
-                      <p>${entry.noteText}</p>
-                      <small>${formatDate(entry.createdAt)}</small>
-                    </li>`
-                  )
-                  .join("")
-              : "<li>No notes yet.</li>"
-          }
+          ${timeline.length ? timeline.map((entry) => `<li><p><strong>${entry.label}:</strong> ${entry.href ? `<a href="${entry.href}">${entry.detail}</a>` : entry.detail}</p><small>${formatDate(entry.when)}</small></li>`).join("") : "<li>No timeline events yet.</li>"}
         </ul>
 
         <form id="add-note-form" class="form-grid">
@@ -1574,8 +1757,14 @@ async function renderContactDetail(contactId) {
     const noteText = String(new FormData(event.currentTarget).get("noteText") || "").trim();
     if (!noteText) return;
 
+    await addTimelineNote({
+      contactId,
+      parentType: "contact",
+      parentId: contactId,
+      noteText,
+    });
+
     await updateDoc(contactRef, {
-      notes: arrayUnion({ noteText, createdAt: Timestamp.now() }),
       updatedAt: serverTimestamp(),
     });
 
