@@ -88,6 +88,19 @@ function explainAuthError(error, action) {
   }
 }
 
+function explainFirestoreError(error) {
+  const errorCode = error?.code || "firestore/unknown";
+
+  if (errorCode === "permission-denied") {
+    return [
+      "This account is signed in, but Firestore access was denied.",
+      "Update Firebase Firestore Security Rules to allow authenticated users to read and write their own leads under users/{userId}/leads.",
+    ].join(" ");
+  }
+
+  return `Firestore request failed (${errorCode}). Check Firestore rules and indexes in Firebase Console.`;
+}
+
 function formatDate(value) {
   if (!value) return "-";
   const date = typeof value.toDate === "function" ? value.toDate() : new Date(value);
@@ -320,8 +333,7 @@ async function renderCurrentRoute() {
     await renderDashboard();
   } catch (error) {
     console.error("Render error:", error);
-    viewContainer.innerHTML =
-      '<p class="view-message">Something went wrong while loading this page.</p>';
+    viewContainer.innerHTML = `<p class="view-message">${explainFirestoreError(error)}</p>`;
   }
 }
 
