@@ -569,7 +569,7 @@ async function renderDashboard() {
           if (item.type === "lead") {
             const stageLabel = getStageById(pipelineSettings, item.stageId)?.label || "Unknown stage";
             return `
-              <article class="panel feed-item feed-item-clickable" data-open-feed-item="true" data-feed-type="lead" data-feed-id="${item.id}" data-lead-source="${item.source}" tabindex="0" role="button">
+              <article class="panel feed-item feed-item-clickable feed-item--lead" data-open-feed-item="true" data-feed-type="lead" data-feed-id="${item.id}" data-lead-source="${item.source}" tabindex="0" role="button">
                 <p class="feed-type">Lead</p>
                 <h3>${item.title}</h3>
                 <p>${item.subtitle}</p>
@@ -589,7 +589,7 @@ async function renderDashboard() {
           }
 
           return `
-            <article class="panel feed-item feed-item-clickable" data-open-feed-item="true" data-feed-type="task" data-feed-id="${item.id}" tabindex="0" role="button">
+            <article class="panel feed-item feed-item-clickable feed-item--task" data-open-feed-item="true" data-feed-type="task" data-feed-id="${item.id}" tabindex="0" role="button">
               <p class="feed-type">Task</p>
               <h3>${item.title}</h3>
               <p>${item.subtitle}</p>
@@ -611,7 +611,7 @@ async function renderDashboard() {
     : '<p class="view-message">No leads or tasks are due right now.</p>';
 
   viewContainer.innerHTML = `
-    <section>
+    <section class="crm-view crm-view--dashboard">
       <div class="view-header">
         <h2>Dashboard Feed</h2>
         <div class="view-header-actions">
@@ -932,11 +932,11 @@ function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, on
   const initialContactPhone = values.contactPhone || selectedContact?.phone || "";
 
   viewContainer.innerHTML = `
-    <section>
+    <section class="crm-view crm-view--leads">
       <div class="view-header">
         <h2>${mode === "create" ? "New Lead" : "Edit Lead"}</h2>
       </div>
-      <form id="lead-form" class="panel form-grid">
+      <form id="lead-form" class="panel panel--lead form-grid">
         <h3 class="full-width">Contact Info</h3>
         <input type="hidden" name="selectedContactId" value="${values.contactId || ""}" />
 
@@ -1087,11 +1087,11 @@ function parseTaskFormValues(formEl) {
 
 function renderTaskForm({ mode, contacts, values, onSubmit, onCancel, onDelete }) {
   viewContainer.innerHTML = `
-    <section>
+    <section class="crm-view crm-view--tasks">
       <div class="view-header">
         <h2>${mode === "create" ? "Add Task" : values.title || "Edit Task"}</h2>
       </div>
-      <form id="task-form" class="panel form-grid">
+      <form id="task-form" class="panel panel--task form-grid">
         <label>Title <input name="title" value="${values.title || ""}" required /></label>
         <label class="full-width">Notes <textarea name="notes" rows="4">${values.notes || ""}</textarea></label>
 
@@ -1266,7 +1266,7 @@ async function renderLeadsPage() {
     .sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0));
 
   viewContainer.innerHTML = `
-    <section>
+    <section class="crm-view crm-view--leads">
       <div class="view-header">
         <h2>Leads</h2>
         <button id="add-lead-btn" type="button">Add Lead +</button>
@@ -1278,7 +1278,7 @@ async function renderLeadsPage() {
                 .map((lead) => {
                   const linkedContact = lead.contactId ? contactById[lead.contactId] : null;
                   return `
-                    <button class="panel feed-item" data-lead-id="${lead.id}" type="button">
+                    <button class="panel feed-item feed-item--lead" data-lead-id="${lead.id}" type="button">
                       <h3>${linkedContact?.name || "Unnamed Lead"}</h3>
                       <p><strong>Stage:</strong> ${getStageById(pipelineSettings, lead.stageId)?.label || lead.stageId || "-"}</p>
                       <p><strong>Status:</strong> ${lead.stageStatus || "pending"}</p>
@@ -1340,7 +1340,7 @@ async function renderTasksPage() {
   const renderTaskCard = (task) => {
     const linkedContact = task.contactId ? contactById[task.contactId] : null;
     return `
-      <button class="panel feed-item" data-task-id="${task.id}" type="button">
+      <button class="panel feed-item feed-item--task" data-task-id="${task.id}" type="button">
         <h3>${task.title || "Untitled Task"}</h3>
         <p><strong>Scheduled:</strong> ${task.scheduledFor ? formatDate(task.scheduledFor) : "No schedule"}</p>
         <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
@@ -1350,7 +1350,7 @@ async function renderTasksPage() {
   };
 
   viewContainer.innerHTML = `
-    <section>
+    <section class="crm-view crm-view--tasks">
       <div class="view-header">
         <h2>Tasks</h2>
         <button id="add-task-btn" type="button">Add Task +</button>
@@ -1411,19 +1411,19 @@ async function renderTaskDetail(taskId) {
     .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
 
   viewContainer.innerHTML = `
-    <section>
+    <section class="crm-view crm-view--tasks">
       <div class="view-header">
         <h2>${task.title || "Task Detail"}</h2>
         <button id="edit-task-btn" type="button">Edit</button>
       </div>
-      <div class="panel detail-grid">
+      <div class="panel panel--task detail-grid">
         <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
         <p><strong>Scheduled:</strong> ${task.scheduledFor ? formatDate(task.scheduledFor) : "No schedule"}</p>
         <p><strong>Status:</strong> ${task.completed ? "Completed" : "Active"}</p>
         <p><strong>Created:</strong> ${formatDate(task.createdAt)}</p>
         <p><strong>Updated:</strong> ${formatDate(task.updatedAt)}</p>
       </div>
-      <div class="panel notes-panel">
+      <div class="panel panel--task notes-panel">
         <h3>Task Notes</h3>
         <ul class="note-list">
           ${taskNotes.length ? taskNotes.map((entry) => `<li><p>${entry.noteText}</p><small>${formatDate(entry.createdAt)}</small></li>`).join("") : "<li>No notes yet.</li>"}
@@ -1546,12 +1546,12 @@ async function renderLeadDetail(leadId) {
     .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
 
   viewContainer.innerHTML = `
-    <section>
+    <section class="crm-view crm-view--leads">
       <div class="view-header">
         <h2>Lead</h2>
         <button id="edit-lead-btn" type="button">Edit</button>
       </div>
-      <div class="panel detail-grid">
+      <div class="panel panel--lead detail-grid">
         <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
         <p><strong>Stage:</strong> ${getStageById(pipelineSettings, lead.stageId)?.label || lead.stageId || "-"}</p>
         <p><strong>Status:</strong> ${lead.stageStatus || lead.status || "pending"}</p>
@@ -1560,7 +1560,7 @@ async function renderLeadDetail(leadId) {
         <p><strong>Updated:</strong> ${formatDate(lead.updatedAt)}</p>
       </div>
 
-      <div class="panel notes-panel">
+      <div class="panel panel--lead notes-panel">
         <h3>Lead Notes</h3>
         <ul class="note-list">
           ${leadNotes.length ? leadNotes.map((entry) => `<li><p>${entry.noteText}</p><small>${formatDate(entry.createdAt)}</small></li>`).join("") : "<li>No notes yet.</li>"}
@@ -1735,9 +1735,10 @@ async function renderContactDetail(contactId) {
         <h3>Timeline</h3>
         <ul class="timeline-list">
           ${timeline.length ? timeline.map((entry) => {
+            const toneClass = entry.kind === "lead" ? "timeline-item--lead" : entry.kind === "task" ? "timeline-item--task" : "";
             const rowBody = `<div><p><strong>${entry.label}:</strong> ${entry.detail}</p><small>${formatDate(entry.when)}</small></div>`;
-            if (!entry.href) return `<li class="timeline-item">${rowBody}</li>`;
-            return `<li><a class="timeline-item timeline-item-link" href="${entry.href}">${rowBody}<span class="timeline-link-pill">View</span></a></li>`;
+            if (!entry.href) return `<li class="timeline-item ${toneClass}">${rowBody}</li>`;
+            return `<li><a class="timeline-item timeline-item-link ${toneClass}" href="${entry.href}">${rowBody}<span class="timeline-link-pill">View</span></a></li>`;
           }).join("") : "<li>No timeline events yet.</li>"}
         </ul>
 
