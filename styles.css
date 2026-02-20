@@ -3,6 +3,12 @@
   --forest-green-dark: #084517;
   --white: #ffffff;
   --card-shadow: 0 16px 32px rgba(0, 0, 0, 0.22);
+  --crm-bg: #050505;
+  --crm-panel: #0c0c0c;
+  --crm-border: rgba(255, 255, 255, 0.28);
+  --crm-divider: rgba(255, 255, 255, 0.18);
+  --lead-border: #2459ff;
+  --task-border: #d1001f;
 }
 
 * {
@@ -139,6 +145,10 @@ button:active {
   padding: 1rem;
 }
 
+#app-page {
+  background: var(--crm-bg);
+}
+
 .top-nav {
   display: flex;
   justify-content: space-between;
@@ -161,6 +171,25 @@ button:active {
 
 .view-container {
   margin-top: 1rem;
+}
+
+.crm-view {
+  background: var(--crm-bg);
+}
+
+.crm-view .view-header {
+  border-bottom: 1px solid var(--crm-divider);
+  padding-bottom: 0.8rem;
+}
+
+.crm-view .view-header-actions {
+  border-left: 1px solid var(--crm-divider);
+  padding-left: 0.75rem;
+}
+
+.crm-view .view-header h2 {
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .view-header {
@@ -191,7 +220,7 @@ button:active {
 .tasks-divider {
   margin: 1rem 0 0.35rem;
   padding-top: 1rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.4);
+  border-top: 1px solid var(--crm-divider);
 }
 
 .tasks-divider h3 {
@@ -208,6 +237,62 @@ button:active {
   border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 14px;
   padding: 1rem;
+}
+
+.crm-view .feed-item {
+  box-shadow: none;
+  background: var(--crm-panel);
+  border: 1px solid var(--crm-border);
+  border-radius: 0;
+}
+
+.crm-view .panel {
+  background: var(--crm-panel);
+  border: 1px solid var(--crm-border);
+  border-radius: 0;
+}
+
+.crm-view .feed-item h3 {
+  margin-bottom: 0.7rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--crm-divider);
+}
+
+.crm-view .button-row {
+  border-top: 1px solid var(--crm-divider);
+  padding-top: 0.7rem;
+}
+
+.crm-view .feed-item--lead {
+  border-color: var(--lead-border);
+}
+
+.crm-view .feed-item--task {
+  border-color: var(--task-border);
+}
+
+.crm-view button,
+.crm-view input,
+.crm-view textarea,
+.crm-view select,
+.crm-view .push-dropdown,
+.crm-view .timeline-link-pill,
+.crm-view .timeline-item {
+  border-radius: 0;
+}
+
+.crm-view button {
+  background-color: #141414;
+  border-color: var(--crm-border);
+}
+
+.crm-view button:hover {
+  background-color: #1d1d1d;
+}
+
+.crm-view .push-dropdown {
+  background: #101010;
+  border-color: var(--crm-border);
 }
 
 .feed-item-clickable {

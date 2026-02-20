@@ -569,7 +569,7 @@ async function renderDashboard() {
           if (item.type === "lead") {
             const stageLabel = getStageById(pipelineSettings, item.stageId)?.label || "Unknown stage";
             return `
-              <article class="panel feed-item feed-item-clickable" data-open-feed-item="true" data-feed-type="lead" data-feed-id="${item.id}" data-lead-source="${item.source}" tabindex="0" role="button">
+              <article class="panel feed-item feed-item-clickable feed-item--lead" data-open-feed-item="true" data-feed-type="lead" data-feed-id="${item.id}" data-lead-source="${item.source}" tabindex="0" role="button">
                 <p class="feed-type">Lead</p>
                 <h3>${item.title}</h3>
                 <p>${item.subtitle}</p>
@@ -589,7 +589,7 @@ async function renderDashboard() {
           }
 
           return `
-            <article class="panel feed-item feed-item-clickable" data-open-feed-item="true" data-feed-type="task" data-feed-id="${item.id}" tabindex="0" role="button">
+            <article class="panel feed-item feed-item-clickable feed-item--task" data-open-feed-item="true" data-feed-type="task" data-feed-id="${item.id}" tabindex="0" role="button">
               <p class="feed-type">Task</p>
               <h3>${item.title}</h3>
               <p>${item.subtitle}</p>
@@ -611,7 +611,7 @@ async function renderDashboard() {
     : '<p class="view-message">No leads or tasks are due right now.</p>';
 
   viewContainer.innerHTML = `
-    <section>
+    <section class="crm-view crm-view--dashboard">
       <div class="view-header">
         <h2>Dashboard Feed</h2>
         <div class="view-header-actions">
@@ -1266,7 +1266,7 @@ async function renderLeadsPage() {
     .sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0));
 
   viewContainer.innerHTML = `
-    <section>
+    <section class="crm-view crm-view--leads">
       <div class="view-header">
         <h2>Leads</h2>
         <button id="add-lead-btn" type="button">Add Lead +</button>
@@ -1278,7 +1278,7 @@ async function renderLeadsPage() {
                 .map((lead) => {
                   const linkedContact = lead.contactId ? contactById[lead.contactId] : null;
                   return `
-                    <button class="panel feed-item" data-lead-id="${lead.id}" type="button">
+                    <button class="panel feed-item feed-item--lead" data-lead-id="${lead.id}" type="button">
                       <h3>${linkedContact?.name || "Unnamed Lead"}</h3>
                       <p><strong>Stage:</strong> ${getStageById(pipelineSettings, lead.stageId)?.label || lead.stageId || "-"}</p>
                       <p><strong>Status:</strong> ${lead.stageStatus || "pending"}</p>
@@ -1340,7 +1340,7 @@ async function renderTasksPage() {
   const renderTaskCard = (task) => {
     const linkedContact = task.contactId ? contactById[task.contactId] : null;
     return `
-      <button class="panel feed-item" data-task-id="${task.id}" type="button">
+      <button class="panel feed-item feed-item--task" data-task-id="${task.id}" type="button">
         <h3>${task.title || "Untitled Task"}</h3>
         <p><strong>Scheduled:</strong> ${task.scheduledFor ? formatDate(task.scheduledFor) : "No schedule"}</p>
         <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
@@ -1350,7 +1350,7 @@ async function renderTasksPage() {
   };
 
   viewContainer.innerHTML = `
-    <section>
+    <section class="crm-view crm-view--tasks">
       <div class="view-header">
         <h2>Tasks</h2>
         <button id="add-task-btn" type="button">Add Task +</button>
