@@ -517,19 +517,16 @@ async function renderDashboard() {
           if (item.type === "lead") {
             const stageLabel = getStageById(pipelineSettings, item.stageId)?.label || "Unknown stage";
             return `
-              <article class="panel feed-item${item.contactId ? " feed-item-clickable" : ""}" ${
-                item.contactId ? `data-open-contact-card="true" data-contact-id="${item.contactId}" tabindex="0" role="button"` : ""
-              }>
+              <article class="panel feed-item feed-item-clickable" data-open-feed-item="true" data-feed-type="lead" data-feed-id="${item.id}" data-lead-source="${item.source}" tabindex="0" role="button">
                 <p class="feed-type">Lead</p>
                 <h3>${item.title}</h3>
                 <p>${item.subtitle}</p>
                 <p><strong>Stage:</strong> ${stageLabel}</p>
                 <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
                 <div class="button-row">
-                  ${item.source === "leads" ? `<button type="button" data-open-lead-id="${item.id}">View</button>` : ""}
-                  <button type="button" data-lead-action="done" data-lead-source="${item.source}" data-lead-id="${item.id}">Done</button>
+                  <button type="button" class="dashboard-action-btn" data-lead-action="done" data-lead-source="${item.source}" data-lead-id="${item.id}">Done</button>
                   <details class="push-menu">
-                    <summary class="secondary-btn">Push</summary>
+                    <summary class="dashboard-action-btn">Push</summary>
                     <div class="push-dropdown" data-push-source="${item.source}" data-push-entity="lead" data-push-id="${item.id}">
                       ${pushOptionsMarkup}
                     </div>
@@ -540,19 +537,16 @@ async function renderDashboard() {
           }
 
           return `
-            <article class="panel feed-item${item.contactId ? " feed-item-clickable" : ""}" ${
-              item.contactId ? `data-open-contact-card="true" data-contact-id="${item.contactId}" tabindex="0" role="button"` : ""
-            }>
+            <article class="panel feed-item feed-item-clickable" data-open-feed-item="true" data-feed-type="task" data-feed-id="${item.id}" tabindex="0" role="button">
               <p class="feed-type">Task</p>
               <h3>${item.title}</h3>
               <p>${item.subtitle}</p>
               <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
               ${item.notes ? `<p>${item.notes}</p>` : ""}
               <div class="button-row">
-                <button type="button" data-open-task-id="${item.id}">View</button>
-                <button type="button" data-task-action="done" data-task-id="${item.id}">Done</button>
+                <button type="button" class="dashboard-action-btn" data-task-action="done" data-task-id="${item.id}">Done</button>
                 <details class="push-menu">
-                  <summary class="secondary-btn">Push</summary>
+                  <summary class="dashboard-action-btn">Push</summary>
                   <div class="push-dropdown" data-push-entity="task" data-push-id="${item.id}">
                     ${pushOptionsMarkup}
                   </div>
@@ -585,36 +579,35 @@ async function renderDashboard() {
     window.location.hash = "#tasks/new";
   });
 
-  viewContainer.querySelectorAll('[data-open-contact-card="true"]').forEach((itemEl) => {
-    const navigateToContact = () => {
-      window.location.hash = `#contact/${itemEl.dataset.contactId}`;
+  viewContainer.querySelectorAll('[data-open-feed-item="true"]').forEach((itemEl) => {
+    const navigateToDetail = () => {
+      const feedType = itemEl.dataset.feedType;
+      const feedId = itemEl.dataset.feedId;
+      if (!feedType || !feedId) return;
+
+      if (feedType === "task") {
+        window.location.hash = `#task/${feedId}`;
+        return;
+      }
+
+      const leadSource = itemEl.dataset.leadSource;
+      if (leadSource === "contacts") {
+        window.location.hash = `#contact/${feedId}`;
+        return;
+      }
+
+      window.location.hash = `#lead/${feedId}`;
     };
 
     itemEl.addEventListener("click", (event) => {
       if (event.target.closest("button") || event.target.closest("summary")) return;
-      navigateToContact();
+      navigateToDetail();
     });
 
     itemEl.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
-      navigateToContact();
-    });
-  });
-
-  viewContainer.querySelectorAll("[data-open-lead-id]").forEach((buttonEl) => {
-    buttonEl.addEventListener("click", () => {
-      const leadId = buttonEl.dataset.openLeadId;
-      if (!leadId) return;
-      window.location.hash = `#lead/${leadId}`;
-    });
-  });
-
-  viewContainer.querySelectorAll("[data-open-task-id]").forEach((buttonEl) => {
-    buttonEl.addEventListener("click", () => {
-      const taskId = buttonEl.dataset.openTaskId;
-      if (!taskId) return;
-      window.location.hash = `#task/${taskId}`;
+      navigateToDetail();
     });
   });
 
