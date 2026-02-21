@@ -558,11 +558,12 @@ select {
 .calendar-month-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-rows: minmax(112px, 1fr);
   gap: 0.4rem;
 }
 
 .calendar-day-cell {
-  min-height: 108px;
+  min-height: 112px;
   border: 1px solid var(--crm-border);
   background: #0b0b0b;
   text-align: left;
@@ -570,6 +571,8 @@ select {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
+  cursor: pointer;
+  overflow: hidden;
 }
 
 .calendar-day-cell:hover {
@@ -590,8 +593,10 @@ select {
 }
 
 .calendar-chip-list {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 0.24rem;
+  min-height: 0;
 }
 
 .calendar-chip {
@@ -603,6 +608,7 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   border: 1px solid transparent;
+  color: #f5f5f5;
 }
 
 .calendar-item--task {
@@ -616,6 +622,13 @@ select {
 }
 
 .calendar-more {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  padding: 0;
+  width: fit-content;
+  cursor: pointer;
   font-size: 0.72rem;
   opacity: 0.75;
 }
@@ -801,6 +814,20 @@ select {
   padding: 0.16rem 0.3rem;
   font-size: 0.72rem;
   min-height: auto;
+}
+
+.calendar-day-list-item.calendar-item--task,
+.calendar-allday-item.calendar-item--task,
+.calendar-week-event.calendar-item--task {
+  background: rgba(57, 101, 255, 0.2);
+  border-color: #3965ff;
+}
+
+.calendar-day-list-item.calendar-item--lead,
+.calendar-allday-item.calendar-item--lead,
+.calendar-week-event.calendar-item--lead {
+  background: rgba(209, 0, 31, 0.2);
+  border-color: #d1001f;
 }
 
 .calendar-day-list {
