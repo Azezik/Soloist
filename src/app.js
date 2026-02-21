@@ -44,6 +44,15 @@ function setStatus(message) {
   statusEl.textContent = message;
 }
 
+function escapeHtml(value = "") {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function readCredentials() {
   const email = emailEl.value.trim();
   const password = passwordEl.value;
@@ -198,7 +207,7 @@ function routeFromHash() {
 }
 
 function renderLoading(text = "Loading...") {
-  viewContainer.innerHTML = `<p class="view-message">${text}</p>`;
+  viewContainer.innerHTML = `<p class="view-message">${escapeHtml(text)}</p>`;
 }
 
 async function renderDashboard() {
@@ -291,7 +300,7 @@ async function renderDashboard() {
   const pushOptionsMarkup = pushPresets
     .map(
       (preset, index) =>
-        `<button type="button" data-push-select="true" data-preset-index="${index}" class="push-option">${preset.label}</button>`
+        `<button type="button" data-push-select="true" data-preset-index="${index}" class="push-option">${escapeHtml(preset.label)}</button>`
     )
     .join("");
 
@@ -307,9 +316,9 @@ async function renderDashboard() {
             return `
               <article class="panel feed-item feed-item-clickable feed-item--lead" data-open-feed-item="true" data-feed-type="lead" data-feed-id="${item.id}" data-lead-source="${item.source}" tabindex="0" role="button">
                 <p class="feed-type">Lead</p>
-                <h3>${item.title}</h3>
-                <p>${item.subtitle}</p>
-                <p><strong>Stage:</strong> ${stageLabel}</p>
+                <h3>${escapeHtml(item.title)}</h3>
+                <p>${escapeHtml(item.subtitle)}</p>
+                <p><strong>Stage:</strong> ${escapeHtml(stageLabel)}</p>
                 <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
                 <div class="button-row">
                   <button type="button" class="dashboard-action-btn" data-lead-action="done" data-lead-source="${item.source}" data-lead-id="${item.id}">Done</button>
@@ -327,10 +336,10 @@ async function renderDashboard() {
           return `
             <article class="panel feed-item feed-item-clickable feed-item--task" data-open-feed-item="true" data-feed-type="task" data-feed-id="${item.id}" tabindex="0" role="button">
               <p class="feed-type">Task</p>
-              <h3>${item.title}</h3>
-              <p>${item.subtitle}</p>
+              <h3>${escapeHtml(item.title)}</h3>
+              <p>${escapeHtml(item.subtitle)}</p>
               <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
-              ${item.notes ? `<p>${item.notes}</p>` : ""}
+              ${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ""}
               <div class="button-row">
                 <button type="button" class="dashboard-action-btn" data-task-action="done" data-task-id="${item.id}">Done</button>
                 <details class="push-menu">
@@ -561,9 +570,9 @@ async function renderContactsPage() {
           .map((contact) => {
             return `
               <button class="panel feed-item" data-contact-id="${contact.id}" type="button">
-                <h3>${contact.name || "Unnamed Contact"}</h3>
-                <p>${contact.email || "No email"}</p>
-                <p>${contact.phone || "No phone"}</p>
+                <h3>${escapeHtml(contact.name || "Unnamed Contact")}</h3>
+                <p>${escapeHtml(contact.email || "No email")}</p>
+                <p>${escapeHtml(contact.phone || "No phone")}</p>
                 <p><strong>Tasks:</strong> ${taskCountByContact[contact.id] || 0}</p>
               </button>
             `;
@@ -618,12 +627,12 @@ function renderContactForm({ mode, values, onSubmit, onCancel, onDelete }) {
   viewContainer.innerHTML = `
     <section>
       <div class="view-header">
-        <h2>${mode === "create" ? "Add Contact" : values.name || "Edit Contact"}</h2>
+        <h2>${escapeHtml(mode === "create" ? "Add Contact" : values.name || "Edit Contact")}</h2>
       </div>
       <form id="contact-form" class="panel form-grid">
-        <label>Name <input name="name" value="${values.name || ""}" required /></label>
-        <label>Email <input name="email" type="email" value="${values.email || ""}" /></label>
-        <label>Phone <input name="phone" type="tel" value="${values.phone || ""}" /></label>
+        <label>Name <input name="name" value="${escapeHtml(values.name || "")}" required /></label>
+        <label>Email <input name="email" type="email" value="${escapeHtml(values.email || "")}" /></label>
+        <label>Phone <input name="phone" type="tel" value="${escapeHtml(values.phone || "")}" /></label>
 
         <div class="button-row full-width">
           <button type="submit">Save</button>
@@ -677,17 +686,17 @@ function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, on
         <input type="hidden" name="selectedContactId" value="${values.contactId || ""}" />
 
         <label>Name
-          <input name="contactName" id="lead-contact-name" value="${initialContactName}" autocomplete="off" />
+          <input name="contactName" id="lead-contact-name" value="${escapeHtml(initialContactName)}" autocomplete="off" />
         </label>
 
         <div id="lead-contact-suggestions" class="lead-contact-suggestions full-width"></div>
 
         <label>Email
-          <input name="contactEmail" id="lead-contact-email" type="email" value="${initialContactEmail}" />
+          <input name="contactEmail" id="lead-contact-email" type="email" value="${escapeHtml(initialContactEmail)}" />
         </label>
 
         <label>Phone
-          <input name="contactPhone" id="lead-contact-phone" type="tel" value="${initialContactPhone}" />
+          <input name="contactPhone" id="lead-contact-phone" type="tel" value="${escapeHtml(initialContactPhone)}" />
         </label>
 
         <h3 class="full-width">Lead Info</h3>
@@ -695,7 +704,7 @@ function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, on
         <label>Stage
           <select name="stageId">
             ${pipelineSettings.stages
-              .map((stage) => `<option value="${stage.id}" ${values.stageId === stage.id ? "selected" : ""}>${stage.label}</option>`)
+              .map((stage) => `<option value="${stage.id}" ${values.stageId === stage.id ? "selected" : ""}>${escapeHtml(stage.label)}</option>`)
               .join("")}
           </select>
         </label>
@@ -708,7 +717,7 @@ function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, on
 
 
         <label class="full-width">Initial Note (Optional)
-          <textarea name="initialNote" rows="3">${values.initialNote || ""}</textarea>
+          <textarea name="initialNote" rows="3">${escapeHtml(values.initialNote || "")}</textarea>
         </label>
 
         <div class="button-row full-width">
@@ -756,7 +765,7 @@ function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, on
       ? matches
           .map(
             (contact) =>
-              `<button type="button" class="lead-contact-option" data-contact-option-id="${contact.id}">${contact.name || "Unnamed"} ${contact.email ? `· ${contact.email}` : ""}</button>`
+              `<button type="button" class="lead-contact-option" data-contact-option-id="${contact.id}">${escapeHtml(contact.name || "Unnamed")} ${contact.email ? `· ${escapeHtml(contact.email)}` : ""}</button>`
           )
           .join("")
       : '<p class="lead-contact-empty">No existing contacts matched. Saving will create a new contact.</p>';
@@ -825,17 +834,17 @@ function renderTaskForm({ mode, contacts, values, onSubmit, onCancel, onDelete }
   viewContainer.innerHTML = `
     <section class="crm-view crm-view--tasks">
       <div class="view-header">
-        <h2>${mode === "create" ? "Add Task" : values.title || "Edit Task"}</h2>
+        <h2>${escapeHtml(mode === "create" ? "Add Task" : values.title || "Edit Task")}</h2>
       </div>
       <form id="task-form" class="panel panel--task form-grid">
-        <label>Title <input name="title" value="${values.title || ""}" required /></label>
-        <label class="full-width">Notes <textarea name="notes" rows="4">${values.notes || ""}</textarea></label>
+        <label>Title <input name="title" value="${escapeHtml(values.title || "")}" required /></label>
+        <label class="full-width">Notes <textarea name="notes" rows="4">${escapeHtml(values.notes || "")}</textarea></label>
 
         <label>Contact (Optional)
           <select name="contactId">
             <option value="">No contact</option>
             ${contacts
-              .map((contact) => `<option value="${contact.id}" ${values.contactId === contact.id ? "selected" : ""}>${contact.name || contact.email || contact.id}</option>`)
+              .map((contact) => `<option value="${contact.id}" ${values.contactId === contact.id ? "selected" : ""}>${escapeHtml(contact.name || contact.email || contact.id)}</option>`)
               .join("")}
           </select>
         </label>
@@ -1015,9 +1024,9 @@ async function renderLeadsPage() {
                   const linkedContact = lead.contactId ? contactById[lead.contactId] : null;
                   return `
                     <button class="panel feed-item feed-item--lead" data-lead-id="${lead.id}" type="button">
-                      <h3>${linkedContact?.name || "Unnamed Lead"}</h3>
-                      <p><strong>Stage:</strong> ${getStageById(pipelineSettings, lead.stageId)?.label || lead.stageId || "-"}</p>
-                      <p><strong>Status:</strong> ${lead.stageStatus || "pending"}</p>
+                      <h3>${escapeHtml(linkedContact?.name || "Unnamed Lead")}</h3>
+                      <p><strong>Stage:</strong> ${escapeHtml(getStageById(pipelineSettings, lead.stageId)?.label || lead.stageId || "-")}</p>
+                      <p><strong>Status:</strong> ${escapeHtml(lead.stageStatus || "pending")}</p>
                       <p><strong>Next Action:</strong> ${lead.nextActionAt ? formatDate(lead.nextActionAt) : "-"}</p>
                       <p><strong>Created:</strong> ${formatDate(lead.createdAt)}</p>
                     </button>
@@ -1077,9 +1086,9 @@ async function renderTasksPage() {
     const linkedContact = task.contactId ? contactById[task.contactId] : null;
     return `
       <button class="panel feed-item feed-item--task" data-task-id="${task.id}" type="button">
-        <h3>${task.title || "Untitled Task"}</h3>
+        <h3>${escapeHtml(task.title || "Untitled Task")}</h3>
         <p><strong>Scheduled:</strong> ${task.scheduledFor ? formatDate(task.scheduledFor) : "No schedule"}</p>
-        <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
+        <p><strong>Contact:</strong> ${escapeHtml(linkedContact?.name || "No contact")}</p>
         <p><strong>Status:</strong> ${task.completed ? "Completed" : "Active"}</p>
       </button>
     `;
@@ -1130,7 +1139,7 @@ async function renderTaskDetail(taskId) {
   const [taskSnapshot, contactsSnapshot, taskNotesSnapshot] = await Promise.all([
     getDoc(taskRef),
     getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
-    getDocs(query(collection(db, "users", currentUser.uid, "notes"), where("parentType", "==", "task"))),
+    getDocs(query(collection(db, "users", currentUser.uid, "notes"), where("parentType", "==", "task"), where("parentId", "==", taskId))),
   ]);
 
   if (!taskSnapshot.exists()) {
@@ -1143,17 +1152,16 @@ async function renderTaskDetail(taskId) {
   const linkedContact = contacts.find((contact) => contact.id === task.contactId) || null;
   const taskNotes = taskNotesSnapshot.docs
     .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
-    .filter((entry) => entry.parentId === taskId)
     .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
 
   viewContainer.innerHTML = `
     <section class="crm-view crm-view--tasks">
       <div class="view-header">
-        <h2>${task.title || "Task Detail"}</h2>
+        <h2>${escapeHtml(task.title || "Task Detail")}</h2>
         <button id="edit-task-btn" type="button">Edit</button>
       </div>
       <div class="panel panel--task detail-grid">
-        <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
+        <p><strong>Contact:</strong> ${escapeHtml(linkedContact?.name || "No contact")}</p>
         <p><strong>Scheduled:</strong> ${task.scheduledFor ? formatDate(task.scheduledFor) : "No schedule"}</p>
         <p><strong>Status:</strong> ${task.completed ? "Completed" : "Active"}</p>
         <p><strong>Created:</strong> ${formatDate(task.createdAt)}</p>
@@ -1162,7 +1170,7 @@ async function renderTaskDetail(taskId) {
       <div class="panel panel--task notes-panel">
         <h3>Task Notes</h3>
         <ul class="note-list">
-          ${taskNotes.length ? taskNotes.map((entry) => `<li><p>${entry.noteText}</p><small>${formatDate(entry.createdAt)}</small></li>`).join("") : "<li>No notes yet.</li>"}
+          ${taskNotes.length ? taskNotes.map((entry) => `<li><p>${escapeHtml(entry.noteText)}</p><small>${formatDate(entry.createdAt)}</small></li>`).join("") : "<li>No notes yet.</li>"}
         </ul>
         <form id="task-note-form" class="form-grid">
           <label class="full-width">Add Note
@@ -1265,7 +1273,7 @@ async function renderLeadDetail(leadId) {
     getPipelineSettings(currentUser.uid),
     getDoc(leadRef),
     getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
-    getDocs(query(collection(db, "users", currentUser.uid, "notes"), where("parentType", "==", "lead"))),
+    getDocs(query(collection(db, "users", currentUser.uid, "notes"), where("parentType", "==", "lead"), where("parentId", "==", leadId))),
   ]);
 
   if (!leadSnapshot.exists()) {
@@ -1278,7 +1286,6 @@ async function renderLeadDetail(leadId) {
   const linkedContact = contacts.find((contact) => contact.id === lead.contactId) || null;
   const leadNotes = leadNotesSnapshot.docs
     .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
-    .filter((entry) => entry.parentId === leadId)
     .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
 
   viewContainer.innerHTML = `
@@ -1288,9 +1295,9 @@ async function renderLeadDetail(leadId) {
         <button id="edit-lead-btn" type="button">Edit</button>
       </div>
       <div class="panel panel--lead detail-grid">
-        <p><strong>Contact:</strong> ${linkedContact?.name || "No contact"}</p>
-        <p><strong>Stage:</strong> ${getStageById(pipelineSettings, lead.stageId)?.label || lead.stageId || "-"}</p>
-        <p><strong>Status:</strong> ${lead.stageStatus || lead.status || "pending"}</p>
+        <p><strong>Contact:</strong> ${escapeHtml(linkedContact?.name || "No contact")}</p>
+        <p><strong>Stage:</strong> ${escapeHtml(getStageById(pipelineSettings, lead.stageId)?.label || lead.stageId || "-")}</p>
+        <p><strong>Status:</strong> ${escapeHtml(lead.stageStatus || lead.status || "pending")}</p>
         <p><strong>Next Action:</strong> ${lead.nextActionAt ? formatDate(lead.nextActionAt) : "-"}</p>
         <p><strong>Created:</strong> ${formatDate(lead.createdAt)}</p>
         <p><strong>Updated:</strong> ${formatDate(lead.updatedAt)}</p>
@@ -1299,7 +1306,7 @@ async function renderLeadDetail(leadId) {
       <div class="panel panel--lead notes-panel">
         <h3>Lead Notes</h3>
         <ul class="note-list">
-          ${leadNotes.length ? leadNotes.map((entry) => `<li><p>${entry.noteText}</p><small>${formatDate(entry.createdAt)}</small></li>`).join("") : "<li>No notes yet.</li>"}
+          ${leadNotes.length ? leadNotes.map((entry) => `<li><p>${escapeHtml(entry.noteText)}</p><small>${formatDate(entry.createdAt)}</small></li>`).join("") : "<li>No notes yet.</li>"}
         </ul>
 
         <form id="lead-note-form" class="form-grid">
@@ -1308,7 +1315,7 @@ async function renderLeadDetail(leadId) {
           </label>
           <div class="button-row full-width">
             <button type="submit">Save Note</button>
-            ${lead.contactId ? `<a href="#contact/${lead.contactId}" class="timeline-link-pill">View contact activity</a>` : ""}
+            ${lead.contactId ? `<a href="#contact/${encodeURIComponent(lead.contactId)}" class="timeline-link-pill">View contact activity</a>` : ""}
             <button type="button" id="lead-close-btn" class="secondary-btn">Done / Close Lead</button>
           </div>
         </form>
@@ -1456,13 +1463,13 @@ async function renderContactDetail(contactId) {
   viewContainer.innerHTML = `
     <section>
       <div class="view-header">
-        <h2>${contact.name || "Contact Detail"}</h2>
+        <h2>${escapeHtml(contact.name || "Contact Detail")}</h2>
         <button id="edit-contact-btn" type="button">Edit</button>
       </div>
 
       <div class="panel detail-grid">
-        <p><strong>Email:</strong> ${contact.email || "-"}</p>
-        <p><strong>Phone:</strong> ${contact.phone || "-"}</p>
+        <p><strong>Email:</strong> ${escapeHtml(contact.email || "-")}</p>
+        <p><strong>Phone:</strong> ${escapeHtml(contact.phone || "-")}</p>
         <p><strong>Created:</strong> ${formatDate(contact.createdAt)}</p>
         <p><strong>Updated:</strong> ${formatDate(contact.updatedAt)}</p>
       </div>
@@ -1472,9 +1479,9 @@ async function renderContactDetail(contactId) {
         <ul class="timeline-list">
           ${timeline.length ? timeline.map((entry) => {
             const toneClass = entry.kind === "lead" ? "timeline-item--lead" : entry.kind === "task" ? "timeline-item--task" : "";
-            const rowBody = `<div><p><strong>${entry.label}:</strong> ${entry.detail}</p><small>${formatDate(entry.when)}</small></div>`;
+            const rowBody = `<div><p><strong>${escapeHtml(entry.label)}:</strong> ${escapeHtml(entry.detail)}</p><small>${formatDate(entry.when)}</small></div>`;
             if (!entry.href) return `<li class="timeline-item ${toneClass}">${rowBody}</li>`;
-            return `<li><a class="timeline-item timeline-item-link ${toneClass}" href="${entry.href}">${rowBody}<span class="timeline-link-pill">View</span></a></li>`;
+            return `<li><a class="timeline-item timeline-item-link ${toneClass}" href="${escapeHtml(entry.href)}">${rowBody}<span class="timeline-link-pill">View</span></a></li>`;
           }).join("") : "<li>No timeline events yet.</li>"}
         </ul>
 
@@ -1548,8 +1555,8 @@ async function renderEditContactForm(contactId) {
 function renderPlaceholder(title) {
   viewContainer.innerHTML = `
     <section>
-      <div class="view-header"><h2>${title}</h2></div>
-      <p class="view-message">${title} is ready for future configuration.</p>
+      <div class="view-header"><h2>${escapeHtml(title)}</h2></div>
+      <p class="view-message">${escapeHtml(title)} is ready for future configuration.</p>
     </section>
   `;
 }
@@ -1574,7 +1581,7 @@ async function renderSettingsPage() {
           .map(
             (stage, index) => `
               <div class="panel detail-grid">
-                <p><strong>${stage.label}</strong></p>
+                <p><strong>${escapeHtml(stage.label)}</strong></p>
                 <label>Offset Days
                   <input type="number" step="1" name="offset-${index}" value="${stage.offsetDays}" required />
                 </label>
@@ -1591,7 +1598,7 @@ async function renderSettingsPage() {
               <div class="panel detail-grid">
                 <p><strong>Preset ${index + 1}</strong></p>
                 <label>Label
-                  <input name="push-label-${index}" value="${preset.label}" required />
+                  <input name="push-label-${index}" value="${escapeHtml(preset.label)}" required />
                 </label>
                 <label>Behavior
                   <select name="push-type-${index}">

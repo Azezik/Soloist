@@ -1,0 +1,95 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedInOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function noPrivilegeFields() {
+      return !('ownerUid' in request.resource.data)
+        && !('tenantId' in request.resource.data)
+        && !('role' in request.resource.data)
+        && !('isAdmin' in request.resource.data);
+    }
+
+    function validString(field, maxLen) {
+      return !(field in request.resource.data)
+        || (request.resource.data[field] is string && request.resource.data[field].size() <= maxLen);
+    }
+
+    function createdAtImmutable() {
+      return !('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt;
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedInOwner(userId);
+      allow write: if false;
+
+      match /contacts/{contactId} {
+        allow read: if isSignedInOwner(userId);
+        allow create, update: if isSignedInOwner(userId)
+          && noPrivilegeFields()
+          && createdAtImmutable()
+          && validString('name', 120)
+          && validString('email', 254)
+          && validString('phone', 40)
+          && validString('status', 40);
+        allow delete: if isSignedInOwner(userId);
+      }
+
+      match /leads/{leadId} {
+        allow read: if isSignedInOwner(userId);
+        allow create, update: if isSignedInOwner(userId)
+          && noPrivilegeFields()
+          && createdAtImmutable()
+          && validString('type', 40)
+          && validString('contactId', 128)
+          && validString('status', 40)
+          && validString('title', 200)
+          && validString('summary', 5000)
+          && validString('stageId', 80)
+          && validString('stageStatus', 40)
+          && (!('archived' in request.resource.data) || request.resource.data.archived is bool);
+        allow delete: if isSignedInOwner(userId);
+      }
+
+      match /tasks/{taskId} {
+        allow read: if isSignedInOwner(userId);
+        allow create, update: if isSignedInOwner(userId)
+          && noPrivilegeFields()
+          && createdAtImmutable()
+          && validString('type', 40)
+          && validString('contactId', 128)
+          && validString('status', 40)
+          && validString('title', 200)
+          && validString('notes', 5000)
+          && validString('summary', 5000)
+          && (!('completed' in request.resource.data) || request.resource.data.completed is bool)
+          && (!('archived' in request.resource.data) || request.resource.data.archived is bool);
+        allow delete: if isSignedInOwner(userId);
+      }
+
+      match /notes/{noteId} {
+        allow read: if isSignedInOwner(userId);
+        allow create, update: if isSignedInOwner(userId)
+          && noPrivilegeFields()
+          && createdAtImmutable()
+          && validString('contactId', 128)
+          && validString('parentType', 40)
+          && validString('parentId', 128)
+          && ('noteText' in request.resource.data)
+          && request.resource.data.noteText is string
+          && request.resource.data.noteText.size() > 0
+          && request.resource.data.noteText.size() <= 5000;
+        allow delete: if isSignedInOwner(userId);
+      }
+
+      match /settings/{settingId} {
+        allow read: if isSignedInOwner(userId);
+        allow create, update: if isSignedInOwner(userId)
+          && noPrivilegeFields();
+        allow delete: if false;
+      }
+    }
+  }
+}
