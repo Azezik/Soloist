@@ -215,6 +215,49 @@ function formatDate(value) {
   return date.toLocaleString();
 }
 
+async function copyTextToClipboard(value) {
+  const text = String(value || "").trim();
+  if (!text) return;
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch (error) {
+    console.error("Clipboard API copy failed, falling back.", error);
+  }
+
+  const fallbackInput = document.createElement("textarea");
+  fallbackInput.value = text;
+  fallbackInput.setAttribute("readonly", "readonly");
+  fallbackInput.style.position = "absolute";
+  fallbackInput.style.left = "-9999px";
+  document.body.appendChild(fallbackInput);
+  fallbackInput.select();
+  document.execCommand("copy");
+  document.body.removeChild(fallbackInput);
+}
+
+function attachClipboardHandlers(scopeEl = viewContainer) {
+  scopeEl.querySelectorAll("[data-copy-text]").forEach((copyButton) => {
+    copyButton.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await copyTextToClipboard(copyButton.dataset.copyText || "");
+    });
+  });
+}
+
+function buildEmailDetailLine(emailValue) {
+  const email = String(emailValue || "").trim();
+  if (!email) {
+    return '<p><strong>Email:</strong> -</p>';
+  }
+
+  return `<p><strong>Email:</strong> <span class="contact-detail-inline">${escapeHtml(email)} <button type="button" class="clipboard-copy-btn" data-copy-text="${escapeHtml(email)}" aria-label="Copy email" title="Copy email">📋</button></span></p>`;
+}
+
 function normalizeBoolean(value) {
   return value === true;
 }
@@ -385,7 +428,9 @@ async function renderDashboard() {
         contactId: lead.contactId || null,
         title: contact.name || "Unnamed Contact",
         subtitle: contact.email || contact.phone || "No contact details",
+        email: contact.email || "",
         stageId: lead.stageId,
+        product: lead.product || "",
         dueAt: lead.nextActionAt,
       };
     });
@@ -443,7 +488,8 @@ async function renderDashboard() {
                 <p class="feed-type">Lead</p>
                 <h3>${escapeHtml(item.title)}</h3>
                 <p>${escapeHtml(item.subtitle)}</p>
-                <p><strong>Stage:</strong> ${escapeHtml(stageLabel)}</p>
+                ${item.email ? `<p><strong>Email:</strong> <span class="contact-detail-inline">${escapeHtml(item.email)} <button type="button" class="clipboard-copy-btn" data-copy-text="${escapeHtml(item.email)}" aria-label="Copy email" title="Copy email">📋</button></span></p>` : ""}
+                <p><strong>Stage:</strong> ${escapeHtml(stageLabel)}${item.product ? `<span class="dashboard-stage-product">• Product: ${escapeHtml(item.product)}</span>` : ""}</p>
                 <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
                 <div class="button-row">
                   <button type="button" class="dashboard-action-btn" data-lead-action="done" data-lead-source="${item.source}" data-lead-id="${item.id}">Done</button>
@@ -598,6 +644,8 @@ async function renderDashboard() {
       await renderDashboard();
     });
   });
+
+  attachClipboardHandlers();
 
   viewContainer.querySelectorAll("[data-push-select]").forEach((buttonEl) => {
     buttonEl.addEventListener("click", async () => {
@@ -798,6 +846,7 @@ function parseLeadFormValues(formEl) {
     contactEmail: String(formData.get("contactEmail") || "").trim(),
     contactPhone: String(formData.get("contactPhone") || "").trim(),
     stageId: String(formData.get("stageId") || "").trim(),
+    product: String(formData.get("product") || "").trim(),
     stageStatus: String(formData.get("stageStatus") || "pending").trim() || "pending",
     initialNote: String(formData.get("initialNote") || "").trim(),
   };
@@ -840,6 +889,10 @@ function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, on
               .map((stage) => `<option value="${stage.id}" ${values.stageId === stage.id ? "selected" : ""}>${escapeHtml(stage.label)}</option>`)
               .join("")}
           </select>
+        </label>
+
+        <label>Product
+          <input name="product" value="${escapeHtml(values.product || "")}" />
         </label>
 
         <label>Status
@@ -958,12 +1011,16 @@ function parseTaskFormValues(formEl) {
   return {
     title: String(formData.get("title") || "").trim(),
     notes: String(formData.get("notes") || "").trim(),
+    email: String(formData.get("email") || "").trim(),
     contactId: String(formData.get("contactId") || "").trim() || null,
     scheduledFor,
   };
 }
 
 function renderTaskForm({ mode, contacts, values, onSubmit, onCancel, onDelete }) {
+  const selectedContact = contacts.find((contact) => contact.id === values.contactId) || null;
+  const initialEmail = values.email || selectedContact?.email || "";
+
   viewContainer.innerHTML = `
     <section class="crm-view crm-view--tasks">
       <div class="view-header">
@@ -980,6 +1037,10 @@ function renderTaskForm({ mode, contacts, values, onSubmit, onCancel, onDelete }
               .map((contact) => `<option value="${contact.id}" ${values.contactId === contact.id ? "selected" : ""}>${escapeHtml(contact.name || contact.email || contact.id)}</option>`)
               .join("")}
           </select>
+        </label>
+
+        <label>Email (Optional)
+          <input name="email" id="task-email" type="email" value="${escapeHtml(initialEmail)}" />
         </label>
 
         <label>Date (Optional)
@@ -1014,6 +1075,16 @@ function renderTaskForm({ mode, contacts, values, onSubmit, onCancel, onDelete }
 
   document.getElementById("task-cancel-btn")?.addEventListener("click", onCancel);
   document.getElementById("task-delete-btn")?.addEventListener("click", onDelete);
+
+  const contactSelectEl = viewContainer.querySelector('select[name="contactId"]');
+  const emailInputEl = document.getElementById("task-email");
+  contactSelectEl?.addEventListener("change", () => {
+    if (!emailInputEl) return;
+    const selectedId = String(contactSelectEl.value || "").trim();
+    const linkedContact = contacts.find((contact) => contact.id === selectedId);
+    if (!linkedContact) return;
+    emailInputEl.value = linkedContact.email || "";
+  });
 }
 
 async function renderAddContactForm() {
@@ -1075,6 +1146,7 @@ async function renderAddLeadForm() {
         title: values.contactName || "Lead",
         summary: values.initialNote || "",
         stageId: values.stageId,
+        product: values.product || "",
         stageStatus: values.stageStatus || "pending",
         nextActionAt: computedNextActionAt,
         createdAt: now,
@@ -1310,6 +1382,7 @@ async function renderTaskDetail(taskId) {
       </div>
       <div class="panel panel--task detail-grid">
         <p><strong>Contact:</strong> ${escapeHtml(linkedContact?.name || "No contact")}</p>
+        ${buildEmailDetailLine(task.email)}
         <p><strong>Scheduled:</strong> ${task.scheduledFor ? formatDate(task.scheduledFor) : "No schedule"}</p>
         <p><strong>Status:</strong> ${task.completed ? "Completed" : "Active"}</p>
         <p><strong>Created:</strong> ${formatDate(task.createdAt)}</p>
@@ -1365,6 +1438,8 @@ async function renderTaskDetail(taskId) {
     });
     await renderTaskDetail(taskId);
   });
+
+  attachClipboardHandlers();
 }
 
 async function renderEditTaskForm(taskId) {
@@ -1457,6 +1532,8 @@ async function renderLeadDetail(leadId) {
       </div>
       <div class="panel panel--lead detail-grid">
         <p><strong>Contact:</strong> ${escapeHtml(linkedContact?.name || "No contact")}</p>
+        ${buildEmailDetailLine(linkedContact?.email || "")}
+        <p><strong>Phone:</strong> ${escapeHtml(linkedContact?.phone || "-")}</p>
         <p><strong>Stage:</strong> ${escapeHtml(getStageById(pipelineSettings, lead.stageId)?.label || lead.stageId || "-")}</p>
         <p><strong>Status:</strong> ${escapeHtml(lead.stageStatus || lead.status || "pending")}</p>
         <p><strong>Next Action:</strong> ${lead.nextActionAt ? formatDate(lead.nextActionAt) : "-"}</p>
@@ -1512,6 +1589,8 @@ async function renderLeadDetail(leadId) {
     });
     await renderLeadDetail(leadId);
   });
+
+  attachClipboardHandlers();
 }
 
 async function renderEditLeadForm(leadId) {
@@ -1583,6 +1662,7 @@ async function renderEditLeadForm(leadId) {
         }),
         title: values.contactName || lead.title || "Lead",
         stageId: values.stageId,
+        product: values.product || "",
         stageStatus: values.stageStatus || "pending",
         nextActionAt: computedNextActionAt,
         updatedAt: serverTimestamp(),
