@@ -249,13 +249,20 @@ function attachClipboardHandlers(scopeEl = viewContainer) {
   });
 }
 
+const clipboardIconMarkup = `
+  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <rect x="9" y="9" width="10" height="10" rx="1.5"></rect>
+    <rect x="5" y="5" width="10" height="10" rx="1.5"></rect>
+  </svg>
+`;
+
 function buildEmailDetailLine(emailValue) {
   const email = String(emailValue || "").trim();
   if (!email) {
     return '<p><strong>Email:</strong> -</p>';
   }
 
-  return `<p><strong>Email:</strong> <span class="contact-detail-inline">${escapeHtml(email)} <button type="button" class="clipboard-copy-btn" data-copy-text="${escapeHtml(email)}" aria-label="Copy email" title="Copy email">📋</button></span></p>`;
+  return `<p><strong>Email:</strong> <span class="contact-detail-inline">${escapeHtml(email)} <button type="button" class="clipboard-copy-btn" data-copy-text="${escapeHtml(email)}" aria-label="Copy email" title="Copy email">${clipboardIconMarkup}</button></span></p>`;
 }
 
 function normalizeBoolean(value) {
@@ -488,7 +495,7 @@ async function renderDashboard() {
                 <p class="feed-type">Lead</p>
                 <h3>${escapeHtml(item.title)}</h3>
                 <p>${escapeHtml(item.subtitle)}</p>
-                ${item.email ? `<p><strong>Email:</strong> <span class="contact-detail-inline">${escapeHtml(item.email)} <button type="button" class="clipboard-copy-btn" data-copy-text="${escapeHtml(item.email)}" aria-label="Copy email" title="Copy email">📋</button></span></p>` : ""}
+                ${item.email ? `<p><strong>Email:</strong> <span class="contact-detail-inline">${escapeHtml(item.email)} <button type="button" class="clipboard-copy-btn" data-copy-text="${escapeHtml(item.email)}" aria-label="Copy email" title="Copy email">${clipboardIconMarkup}</button></span></p>` : ""}
                 <p><strong>Stage:</strong> ${escapeHtml(stageLabel)}${item.product ? `<span class="dashboard-stage-product">• Product: ${escapeHtml(item.product)}</span>` : ""}</p>
                 <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
                 <div class="button-row">
