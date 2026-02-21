@@ -385,6 +385,29 @@ select {
   gap: 0.4rem;
 }
 
+
+.contact-detail-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.clipboard-copy-btn {
+  width: 1.6rem;
+  height: 1.6rem;
+  min-height: 1.6rem;
+  min-width: 1.6rem;
+  padding: 0;
+  font-size: 0.9rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dashboard-stage-product {
+  margin-left: 0.55rem;
+}
 .notes-panel {
   margin-top: 1rem;
 }
