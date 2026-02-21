@@ -616,8 +616,8 @@ select {
 .calendar-allday-item.calendar-item--task,
 .calendar-week-event.calendar-item--task,
 .calendar-day-block.calendar-item--task {
-  background: rgba(57, 101, 255, 0.24);
-  border-color: #3965ff;
+  background: rgba(209, 0, 31, 0.24);
+  border-color: #d1001f;
 }
 
 .calendar-chip.calendar-item--lead,
@@ -625,18 +625,18 @@ select {
 .calendar-allday-item.calendar-item--lead,
 .calendar-week-event.calendar-item--lead,
 .calendar-day-block.calendar-item--lead {
-  background: rgba(209, 0, 31, 0.24);
-  border-color: #d1001f;
-}
-
-.calendar-item--task {
-  background: rgba(57, 101, 255, 0.2);
+  background: rgba(57, 101, 255, 0.24);
   border-color: #3965ff;
 }
 
-.calendar-item--lead {
+.calendar-item--task {
   background: rgba(209, 0, 31, 0.2);
   border-color: #d1001f;
+}
+
+.calendar-item--lead {
+  background: rgba(57, 101, 255, 0.2);
+  border-color: #3965ff;
 }
 
 .calendar-item--projected {
