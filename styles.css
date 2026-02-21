@@ -639,6 +639,16 @@ select {
   border-color: #d1001f;
 }
 
+.calendar-item--projected {
+  opacity: 0.55;
+}
+
+.calendar-item--projected::after {
+  content: " · planned";
+  font-size: 0.68rem;
+  opacity: 0.75;
+}
+
 .calendar-more {
   border: 0;
   background: transparent;

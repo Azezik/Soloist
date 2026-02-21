@@ -79,6 +79,49 @@ export function normalizeCalendarItems(tasks, leads) {
   return [...taskItems, ...leadItems].sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
+export function buildProjectedLeadItems(leads, pipelineSettings, rangeStart, rangeEnd) {
+  if (!Array.isArray(leads) || !Array.isArray(pipelineSettings?.stages)) return [];
+  if (!(rangeStart instanceof Date) || Number.isNaN(rangeStart.getTime())) return [];
+  if (!(rangeEnd instanceof Date) || Number.isNaN(rangeEnd.getTime())) return [];
+
+  const stages = pipelineSettings.stages;
+
+  return leads.flatMap((lead) => {
+    const anchorDate = toDate(lead.nextActionAt);
+    if (!anchorDate) return [];
+
+    const anchorStageIndex = stages.findIndex((stage) => stage.id === lead.stageId);
+    if (anchorStageIndex < 0) return [];
+
+    const anchorStage = stages[anchorStageIndex];
+
+    return stages
+      .slice(anchorStageIndex + 1)
+      .map((stage) => {
+        const deltaDays = Math.max(0, Number(stage.offsetDays) - Number(anchorStage.offsetDays));
+        const projectedDate = new Date(anchorDate.getTime());
+        projectedDate.setDate(projectedDate.getDate() + deltaDays);
+
+        if (projectedDate < rangeStart || projectedDate >= rangeEnd) return null;
+
+        return {
+          id: `lead:${lead.id}:projStage:${stage.id}`,
+          sourceLeadId: lead.id,
+          type: "lead",
+          title: lead.name || lead.company || lead.email || "Unnamed Lead",
+          secondary: `Planned · ${stage.label || stage.id}`,
+          date: projectedDate,
+          dayKey: toDayKey(projectedDate),
+          hasTime: hasSpecificTime(projectedDate),
+          path: `#lead/${lead.id}`,
+          isProjected: true,
+          projectedStageId: stage.id,
+        };
+      })
+      .filter(Boolean);
+  });
+}
+
 export function groupItemsByDay(items) {
   return items.reduce((acc, item) => {
     if (!acc[item.dayKey]) acc[item.dayKey] = [];
