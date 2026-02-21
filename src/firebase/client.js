@@ -1,4 +1,3 @@
-window.process = window.process || { env: {} };
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
 import {
   initializeAppCheck,
@@ -27,6 +26,8 @@ import {
   Timestamp,
   where,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
+
+window.process = window.process || { env: {} };
 
 const firebaseConfig = {
   apiKey: "AIzaSyCvxDrprgML-gEJqYTlO_mQ0w9jtiHri8s",
