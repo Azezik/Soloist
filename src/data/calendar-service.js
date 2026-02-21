@@ -1,4 +1,4 @@
-import { collection, db, getDocs } from "./firestore-service.js";
+import { Timestamp, collection, db, doc, getDocs, serverTimestamp, updateDoc } from "./firestore-service.js";
 
 export async function getCalendarData(currentUserId) {
   const [contactsSnapshot, tasksSnapshot, leadsSnapshot] = await Promise.all([
@@ -30,4 +30,17 @@ export async function getCalendarData(currentUserId) {
     });
 
   return { tasks, leads };
+}
+
+export async function updateCalendarItemSchedule(currentUserId, calendarItem, nextDate) {
+  if (!currentUserId || !calendarItem?.id || !calendarItem?.type || !(nextDate instanceof Date)) return;
+
+  const isTask = calendarItem.type === "task";
+  const itemRef = doc(db, "users", currentUserId, isTask ? "tasks" : "leads", calendarItem.id);
+  const dateField = isTask ? "scheduledFor" : "nextActionAt";
+
+  await updateDoc(itemRef, {
+    [dateField]: Timestamp.fromDate(nextDate),
+    updatedAt: serverTimestamp(),
+  });
 }
