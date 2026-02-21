@@ -103,6 +103,19 @@ function resolveDroppedDate(item, targetDay, options = {}) {
 async function applyItemReschedule(state, dragItem, nextDate) {
   if (dragItem?.isProjected) return;
   await updateCalendarItemSchedule(state.currentUserId, dragItem, nextDate);
+
+  if (dragItem.type === "lead") {
+    state.leads = state.leads.map((lead) => {
+      if (lead.id !== dragItem.id) return lead;
+      return {
+        ...lead,
+        nextActionAt: nextDate,
+      };
+    });
+  }
+
+  // Trigger projection recalculation after drag persistence to sync projected events without page reload.
+  state.projectionRevision += 1;
   state.items = state.items
     .map((item) => {
       if (item.id !== dragItem.id || item.type !== dragItem.type) return item;
