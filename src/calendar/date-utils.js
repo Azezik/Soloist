@@ -18,6 +18,20 @@ export function addMonths(date, delta) {
   return new Date(date.getFullYear(), date.getMonth() + delta, 1);
 }
 
+export function startOfWeek(date, weekStartsOn = 0) {
+  const dayStart = startOfDay(date);
+  const offset = (dayStart.getDay() - weekStartsOn + 7) % 7;
+  return addDays(dayStart, -offset);
+}
+
+export function addWeeks(date, delta) {
+  return addDays(date, delta * 7);
+}
+
+export function addDays(date, delta) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + delta);
+}
+
 export function startOfDay(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
@@ -37,8 +51,27 @@ export function toDayKey(date) {
   return `${year}-${month}-${day}`;
 }
 
+export function fromDayKey(dayKey) {
+  return toDate(`${dayKey}T00:00:00`);
+}
+
 export function formatMonthTitle(date) {
   return date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
+export function formatWeekRangeTitle(weekStart) {
+  const weekEnd = addDays(weekStart, 6);
+  const startMonth = weekStart.toLocaleDateString(undefined, { month: "short" });
+  const endMonth = weekEnd.toLocaleDateString(undefined, { month: "short" });
+  const startDay = weekStart.getDate();
+  const endDay = weekEnd.getDate();
+  const endYear = weekEnd.getFullYear();
+
+  if (weekStart.getFullYear() === weekEnd.getFullYear() && weekStart.getMonth() === weekEnd.getMonth()) {
+    return `${startMonth} ${startDay}–${endDay}, ${endYear}`;
+  }
+
+  return `${startMonth} ${startDay} – ${endMonth} ${endDay}, ${endYear}`;
 }
 
 export function formatDayTitle(date) {
