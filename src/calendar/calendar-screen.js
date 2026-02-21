@@ -42,6 +42,12 @@ function getItemClass(itemType) {
   return itemType === "task" ? "calendar-item--task" : "calendar-item--lead";
 }
 
+function renderEventChip(item, className = "calendar-chip") {
+  return `<button type="button" class="${className} ${getItemClass(item.type)}" data-open-item="${item.path}">${escapeHtml(
+    item.title
+  )}</button>`;
+}
+
 function openItem(path) {
   window.location.hash = path;
 }
@@ -103,22 +109,19 @@ function renderMonthView(state) {
       const remaining = dayItems.length - previewItems.length;
 
       const chips = previewItems
-        .map(
-          (item) =>
-            `<button type="button" class="calendar-chip ${getItemClass(item.type)}" data-open-item="${item.path}">${escapeHtml(item.title)}</button>`
-        )
+        .map((item) => renderEventChip(item))
         .join("");
 
       return `
-        <button type="button" class="calendar-day-cell ${cell.inMonth ? "" : "calendar-day-cell--outside"} ${
+        <article class="calendar-day-cell ${cell.inMonth ? "" : "calendar-day-cell--outside"} ${
           cell.isToday ? "calendar-day-cell--today" : ""
-        }" data-open-day="${cell.dayKey}">
+        }" data-open-day="${cell.dayKey}" role="button" tabindex="0" aria-label="Open ${cell.date.toDateString()}">
           <span class="calendar-day-number">${cell.date.getDate()}</span>
           <div class="calendar-chip-list">
             ${chips}
-            ${remaining > 0 ? `<span class="calendar-more" data-open-day="${cell.dayKey}">+${remaining} more</span>` : ""}
+            ${remaining > 0 ? `<button type="button" class="calendar-more" data-open-day="${cell.dayKey}">+${remaining} more</button>` : ""}
           </div>
-        </button>
+        </article>
       `;
     })
     .join("");
@@ -133,10 +136,30 @@ function renderMonthView(state) {
 
   attachSharedHeaderEvents(state);
 
-  state.viewContainer.querySelectorAll("[data-open-day]").forEach((dayEl) => {
-    dayEl.addEventListener("click", (event) => {
-      event.stopPropagation();
+  state.viewContainer.querySelectorAll(".calendar-day-cell[data-open-day]").forEach((dayEl) => {
+    dayEl.addEventListener("click", () => {
       const selectedDate = fromDayKey(dayEl.dataset.openDay);
+      if (!selectedDate) return;
+      state.focusedDate = selectedDate;
+      state.view = VIEW_DAY;
+      renderByView(state);
+    });
+
+    dayEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      const selectedDate = fromDayKey(dayEl.dataset.openDay);
+      if (!selectedDate) return;
+      state.focusedDate = selectedDate;
+      state.view = VIEW_DAY;
+      renderByView(state);
+    });
+  });
+
+  state.viewContainer.querySelectorAll(".calendar-more[data-open-day]").forEach((moreEl) => {
+    moreEl.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const selectedDate = fromDayKey(moreEl.dataset.openDay);
       if (!selectedDate) return;
       state.focusedDate = selectedDate;
       state.view = VIEW_DAY;
@@ -160,10 +183,7 @@ function renderWeekView(state) {
     .map((day) => {
       const { allDay } = splitDayItems(state.items, day.date);
       const preview = allDay.slice(0, 2)
-        .map(
-          (item) =>
-            `<button type="button" class="calendar-chip ${getItemClass(item.type)}" data-open-item="${item.path}">${escapeHtml(item.title)}</button>`
-        )
+        .map((item) => renderEventChip(item))
         .join("");
       const remaining = allDay.length - 2;
       return `
