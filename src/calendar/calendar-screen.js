@@ -159,9 +159,11 @@ function attachSharedHeaderEvents(state) {
 function attachSharedDragEvents(state) {
   state.viewContainer.querySelectorAll("[data-drag-item-id]").forEach((itemEl) => {
     itemEl.addEventListener("dragstart", (event) => {
+      const bounds = itemEl.getBoundingClientRect();
       state.dragState = {
         itemId: itemEl.dataset.dragItemId,
         itemType: itemEl.dataset.dragItemType,
+        grabOffsetY: Math.max(0, (event.clientY || 0) - bounds.top),
       };
       state.suppressNextOpen = false;
       itemEl.classList.add("calendar-chip--dragging");
@@ -484,7 +486,10 @@ function renderDayView(state) {
     const dragItem = getDraggedItem(state);
     if (!dragItem) return;
     const bounds = dayDropZone.getBoundingClientRect();
-    const relativeY = Math.max(0, Math.min(event.clientY - bounds.top, bounds.height));
+    const relativeY = Math.max(
+      0,
+      Math.min(event.clientY - bounds.top - (state.dragState.grabOffsetY || 0), bounds.height)
+    );
     const dayMinutes = DAY_VIEW_END_HOUR * 60;
     const minuteRatio = bounds.height > 0 ? relativeY / bounds.height : 0;
     const snappedMinutes = toSnappedMinutes(Math.round(minuteRatio * dayMinutes));
