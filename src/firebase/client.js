@@ -1,5 +1,9 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
 import {
+  initializeAppCheck,
+  ReCaptchaV3Provider,
+} from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app-check.js";
+import {
   getAuth,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -34,6 +38,10 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
+initializeAppCheck(app, {
+  provider: new ReCaptchaV3Provider("6LcwdnMsAAAAAGS8urVdkRWv0w9TzqL44M5wqYQo"),
+  isTokenAutoRefreshEnabled: true,
+});
 const auth = getAuth(app);
 const db = getFirestore(app);
 
