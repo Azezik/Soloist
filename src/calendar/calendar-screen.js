@@ -1,4 +1,5 @@
 import { getCalendarData, updateCalendarItemSchedule } from "../data/calendar-service.js";
+import { getPipelineSettings } from "../data/settings-service.js";
 import {
   addDays,
   addMonths,
@@ -19,6 +20,7 @@ import {
   groupItemsByDay,
   normalizeCalendarItems,
   splitDayItems,
+  buildProjectedLeadItems,
 } from "./calendar-utils.js";
 
 const MAX_MONTH_CHIPS = 3;
@@ -44,8 +46,17 @@ function getItemClass(itemType) {
   return itemType === "task" ? "calendar-item--task" : "calendar-item--lead";
 }
 
+function getProjectedClass(item) {
+  return item.isProjected ? "calendar-item--projected" : "";
+}
+
+function renderDragAttributes(item) {
+  if (item.isProjected) return "";
+  return `draggable="true" data-drag-item-id="${item.id}" data-drag-item-type="${item.type}"`;
+}
+
 function renderEventChip(item, className = "calendar-chip") {
-  return `<button type="button" draggable="true" class="${className} ${getItemClass(item.type)}" data-open-item="${item.path}" data-drag-item-id="${item.id}" data-drag-item-type="${item.type}">${escapeHtml(
+  return `<button type="button" ${renderDragAttributes(item)} class="${className} ${getItemClass(item.type)} ${getProjectedClass(item)}" data-open-item="${item.path}">${escapeHtml(
     item.title
   )}</button>`;
 }
@@ -90,6 +101,7 @@ function resolveDroppedDate(item, targetDay, options = {}) {
 }
 
 async function applyItemReschedule(state, dragItem, nextDate) {
+  if (dragItem?.isProjected) return;
   await updateCalendarItemSchedule(state.currentUserId, dragItem, nextDate);
   state.items = state.items
     .map((item) => {
@@ -102,6 +114,8 @@ async function applyItemReschedule(state, dragItem, nextDate) {
       };
     })
     .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  state.projectionCache.clear();
 }
 
 function getDraggedItem(state) {
@@ -188,7 +202,7 @@ function attachSharedDragEvents(state) {
 function renderMonthView(state) {
   const monthDate = startOfMonth(state.focusedDate);
   const grid = buildMonthGrid(monthDate, 0);
-  const byDay = groupItemsByDay(state.items);
+  const byDay = groupItemsByDay(getRenderableItems(state));
 
   const gridMarkup = grid
     .map((cell) => {
@@ -289,10 +303,11 @@ function renderMonthView(state) {
 
 function renderWeekView(state) {
   const weekDays = buildWeekDays(state.focusedDate, 0);
+  const items = getRenderableItems(state);
 
   const allDayColumns = weekDays
     .map((day) => {
-      const { allDay } = splitDayItems(state.items, day.date);
+      const { allDay } = splitDayItems(items, day.date);
       const preview = allDay.slice(0, 2).map((item) => renderEventChip(item)).join("");
       const remaining = allDay.length - 2;
       return `
@@ -321,17 +336,17 @@ function renderWeekView(state) {
   for (let hour = DAY_VIEW_START_HOUR; hour < DAY_VIEW_END_HOUR; hour += 1) {
     const rowColumns = weekDays
       .map((day) => {
-        const { timed } = splitDayItems(state.items, day.date);
+        const { timed } = splitDayItems(items, day.date);
         const thisHour = timed.filter((item) => item.date.getHours() === hour);
         const preview = thisHour
           .slice(0, 2)
           .map((item) => {
             const style = computeTimedBlockStyle(item, thisHour, hour, hour + 1);
-            return `<button type="button" draggable="true" class="calendar-week-event ${getItemClass(
+            return `<button type="button" ${renderDragAttributes(item)} class="calendar-week-event ${getItemClass(
               item.type
-            )}" style="left:${style.left}%;width:${style.width}%;" data-open-item="${item.path}" data-drag-item-id="${
-              item.id
-            }" data-drag-item-type="${item.type}">${escapeHtml(formatTimeLabel(item.date))} · ${escapeHtml(item.title)}</button>`;
+            )} ${getProjectedClass(item)}" style="left:${style.left}%;width:${style.width}%;" data-open-item="${item.path}">${escapeHtml(
+              formatTimeLabel(item.date)
+            )} · ${escapeHtml(item.title)}</button>`;
           })
           .join("");
         const remaining = thisHour.length - 2;
@@ -413,13 +428,13 @@ function renderWeekView(state) {
 
 function renderDayView(state) {
   const selectedDate = startOfDay(state.focusedDate);
-  const { timed, allDay } = splitDayItems(state.items, selectedDate);
+  const { timed, allDay } = splitDayItems(getRenderableItems(state), selectedDate);
 
   const allDayMarkup = allDay.length
     ? allDay
         .map(
           (item) => `
-            <button type="button" draggable="true" class="calendar-allday-item ${getItemClass(item.type)}" data-open-item="${item.path}" data-drag-item-id="${item.id}" data-drag-item-type="${item.type}">
+            <button type="button" ${renderDragAttributes(item)} class="calendar-allday-item ${getItemClass(item.type)} ${getProjectedClass(item)}" data-open-item="${item.path}">
               <p>${escapeHtml(item.title)}</p>
               ${item.secondary ? `<small>${escapeHtml(item.secondary)}</small>` : ""}
             </button>
@@ -431,9 +446,9 @@ function renderDayView(state) {
   const timelineEventsMarkup = timed
     .map((item) => {
       const minutes = item.date.getHours() * 60 + item.date.getMinutes();
-      return `<button type="button" draggable="true" class="calendar-day-block ${getItemClass(item.type)}" style="top: calc(var(--day-minute-height) * ${minutes}px);" data-open-item="${
+      return `<button type="button" ${renderDragAttributes(item)} class="calendar-day-block ${getItemClass(item.type)} ${getProjectedClass(item)}" style="top: calc(var(--day-minute-height) * ${minutes}px);" data-open-item="${
         item.path
-      }" data-drag-item-id="${item.id}" data-drag-item-type="${item.type}"><p>${escapeHtml(item.title)}</p><small>${escapeHtml(
+      }"><p>${escapeHtml(item.title)}</p><small>${escapeHtml(
         formatTimeLabel(item.date)
       )}</small></button>`;
     })
@@ -520,8 +535,39 @@ function renderByView(state) {
   renderMonthView(state);
 }
 
+function getVisibleRangeForView(state) {
+  if (state.view === VIEW_DAY) {
+    const start = startOfDay(state.focusedDate);
+    return { start, end: addDays(start, 1) };
+  }
+
+  if (state.view === VIEW_WEEK) {
+    const weekDays = buildWeekDays(state.focusedDate, 0);
+    return { start: startOfDay(weekDays[0].date), end: addDays(startOfDay(weekDays[6].date), 1) };
+  }
+
+  const grid = buildMonthGrid(startOfMonth(state.focusedDate), 0);
+  return { start: startOfDay(grid[0].date), end: addDays(startOfDay(grid[grid.length - 1].date), 1) };
+}
+
+function getRenderableItems(state) {
+  const range = getVisibleRangeForView(state);
+  const cacheKey = `${state.view}:${toDayKey(range.start)}:${toDayKey(range.end)}:${state.projectionRevision}`;
+  if (state.projectionCache.has(cacheKey)) {
+    return state.projectionCache.get(cacheKey);
+  }
+
+  const projectedItems = buildProjectedLeadItems(state.leads, state.pipelineSettings, range.start, range.end);
+  const items = [...state.items, ...projectedItems].sort((a, b) => a.date.getTime() - b.date.getTime());
+  state.projectionCache.set(cacheKey, items);
+  return items;
+}
+
 export async function renderCalendarScreen({ viewContainer, currentUserId }) {
-  const { tasks, leads } = await getCalendarData(currentUserId);
+  const [{ tasks, leads }, pipelineSettings] = await Promise.all([
+    getCalendarData(currentUserId),
+    getPipelineSettings(currentUserId),
+  ]);
 
   const state = {
     viewContainer,
@@ -529,8 +575,12 @@ export async function renderCalendarScreen({ viewContainer, currentUserId }) {
     focusedDate: startOfDay(new Date()),
     view: VIEW_MONTH,
     items: normalizeCalendarItems(tasks, leads),
+    leads,
+    pipelineSettings,
     dragState: null,
     suppressNextOpen: false,
+    projectionCache: new Map(),
+    projectionRevision: 0,
   };
 
   renderByView(state);
