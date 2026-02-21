@@ -2,7 +2,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/fireba
 import {
   initializeAppCheck,
   ReCaptchaV3Provider,
-} from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app-check-compat.js";
+} from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app-check.js";
 import {
   getAuth,
   createUserWithEmailAndPassword,
