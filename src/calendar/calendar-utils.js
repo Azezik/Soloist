@@ -1,21 +1,39 @@
-import { sameDay, startOfDay, toDate, toDayKey } from "./date-utils.js";
+import { addDays, sameDay, startOfDay, startOfWeek, toDate, toDayKey } from "./date-utils.js";
 
 const MONTH_GRID_WEEKS = 6;
 const DAYS_IN_WEEK = 7;
 
+function hasSpecificTime(date) {
+  return date.getHours() !== 0 || date.getMinutes() !== 0 || date.getSeconds() !== 0;
+}
+
 export function buildMonthGrid(monthDate, weekStartsOn = 0) {
   const monthStart = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
-  const dayOfWeek = monthStart.getDay();
-  const offset = (dayOfWeek - weekStartsOn + DAYS_IN_WEEK) % DAYS_IN_WEEK;
-  const gridStart = new Date(monthStart.getFullYear(), monthStart.getMonth(), 1 - offset);
+  const gridStart = startOfWeek(monthStart, weekStartsOn);
 
   const days = [];
   for (let index = 0; index < MONTH_GRID_WEEKS * DAYS_IN_WEEK; index += 1) {
-    const date = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + index);
+    const date = addDays(gridStart, index);
     days.push({
       date,
       dayKey: toDayKey(date),
       inMonth: date.getMonth() === monthDate.getMonth(),
+      isToday: sameDay(date, new Date()),
+    });
+  }
+
+  return days;
+}
+
+export function buildWeekDays(focusedDate, weekStartsOn = 0) {
+  const weekStart = startOfWeek(focusedDate, weekStartsOn);
+  const days = [];
+
+  for (let index = 0; index < DAYS_IN_WEEK; index += 1) {
+    const date = addDays(weekStart, index);
+    days.push({
+      date,
+      dayKey: toDayKey(date),
       isToday: sameDay(date, new Date()),
     });
   }
@@ -34,6 +52,9 @@ export function normalizeCalendarItems(tasks, leads) {
         title: task.title || "Untitled Task",
         secondary: task.category || "",
         date,
+        dayKey: toDayKey(date),
+        hasTime: hasSpecificTime(date),
+        path: `#task/${task.id}`,
       };
     })
     .filter(Boolean);
@@ -48,6 +69,9 @@ export function normalizeCalendarItems(tasks, leads) {
         title: lead.name || lead.company || lead.email || "Unnamed Lead",
         secondary: lead.stageStatus || "",
         date,
+        dayKey: toDayKey(date),
+        hasTime: hasSpecificTime(date),
+        path: `#lead/${lead.id}`,
       };
     })
     .filter(Boolean);
@@ -57,24 +81,22 @@ export function normalizeCalendarItems(tasks, leads) {
 
 export function groupItemsByDay(items) {
   return items.reduce((acc, item) => {
-    const key = toDayKey(item.date);
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(item);
+    if (!acc[item.dayKey]) acc[item.dayKey] = [];
+    acc[item.dayKey].push(item);
     return acc;
   }, {});
 }
 
 export function splitDayItems(items, selectedDay) {
   const dayStart = startOfDay(selectedDay);
-  const nextDay = new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate() + 1);
+  const nextDay = addDays(dayStart, 1);
 
   const dayItems = items.filter((item) => item.date >= dayStart && item.date < nextDay);
   const timed = [];
   const allDay = [];
 
   dayItems.forEach((item) => {
-    const hasSpecificTime = item.date.getHours() !== 0 || item.date.getMinutes() !== 0;
-    if (hasSpecificTime) {
+    if (item.hasTime) {
       timed.push(item);
       return;
     }
@@ -92,4 +114,20 @@ export function computeTimePositionPercent(date, startHour, endHour) {
   const minuteOfDay = date.getHours() * 60 + date.getMinutes();
   const clamped = Math.min(Math.max(minuteOfDay, startMinutes), endMinutes);
   return ((clamped - startMinutes) / total) * 100;
+}
+
+export function computeTimedBlockStyle(item, timedItems, startHour, endHour) {
+  const sameSlot = timedItems.filter(
+    (candidate) => candidate.date.getHours() === item.date.getHours() && candidate.date.getMinutes() === item.date.getMinutes()
+  );
+  const lane = sameSlot.findIndex((candidate) => candidate.id === item.id && candidate.type === item.type);
+  const laneCount = Math.max(1, sameSlot.length);
+  const width = 100 / laneCount;
+  const left = lane * width;
+
+  return {
+    top: computeTimePositionPercent(item.date, startHour, endHour),
+    left,
+    width,
+  };
 }

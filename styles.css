@@ -710,3 +710,120 @@ select {
     min-height: 680px;
   }
 }
+
+.calendar-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.calendar-nav-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.calendar-period-title {
+  margin: 0;
+  min-width: 190px;
+  font-weight: 700;
+}
+
+.calendar-view-switcher {
+  display: inline-flex;
+  border: 1px solid var(--crm-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.calendar-view-switcher button {
+  border: 0;
+  border-right: 1px solid var(--crm-border);
+  border-radius: 0;
+  background: #0f0f0f;
+}
+
+.calendar-view-switcher button:last-child {
+  border-right: 0;
+}
+
+.calendar-view-switcher .is-active {
+  background: #2a2a2a;
+}
+
+.calendar-chip {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  background-clip: padding-box;
+}
+
+.calendar-week-grid {
+  display: grid;
+  grid-template-columns: 74px repeat(7, minmax(0, 1fr));
+  border: 1px solid var(--crm-border);
+}
+
+.calendar-week-top-left,
+.calendar-week-day-header,
+.calendar-week-all-day-cell,
+.calendar-week-time-label,
+.calendar-week-cell {
+  border-right: 1px solid var(--crm-border);
+  border-bottom: 1px solid var(--crm-border);
+  min-height: 50px;
+  padding: 0.25rem;
+}
+
+.calendar-week-day-header {
+  background: #131313;
+  color: inherit;
+  text-align: center;
+}
+
+.calendar-week-day-header--today {
+  background: #1c1c1c;
+}
+
+.calendar-week-all-day-cell,
+.calendar-week-cell {
+  position: relative;
+  display: grid;
+  gap: 0.2rem;
+  align-content: start;
+}
+
+.calendar-week-event {
+  position: relative;
+  text-align: left;
+  padding: 0.16rem 0.3rem;
+  font-size: 0.72rem;
+  min-height: auto;
+}
+
+.calendar-day-list {
+  margin-top: 0.8rem;
+}
+
+.calendar-day-list-inner {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.calendar-day-list-item {
+  border: 1px solid var(--crm-border);
+  background: #111;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.7rem;
+  width: 100%;
+  text-align: left;
+}
+
+.calendar-allday-item {
+  width: 100%;
+  text-align: left;
+  background: #101010;
+}
