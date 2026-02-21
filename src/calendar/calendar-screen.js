@@ -61,8 +61,13 @@ function renderEventChip(item, className = "calendar-chip") {
   )}</button>`;
 }
 
-function openItem(path) {
-  window.location.hash = path;
+function buildCalendarOriginHash(state) {
+  return `#calendar?view=${encodeURIComponent(state.view)}&date=${encodeURIComponent(toDayKey(state.focusedDate))}`;
+}
+
+function openItem(path, state) {
+  const originRoute = buildCalendarOriginHash(state);
+  window.location.hash = `${path}?from=${encodeURIComponent(originRoute)}`;
 }
 
 function addDefaultTime(date) {
@@ -309,7 +314,7 @@ function renderMonthView(state) {
     itemEl.addEventListener("click", (event) => {
       if (state.suppressNextOpen) return;
       event.stopPropagation();
-      openItem(itemEl.dataset.openItem);
+      openItem(itemEl.dataset.openItem, state);
     });
   });
 }
@@ -434,7 +439,7 @@ function renderWeekView(state) {
     itemEl.addEventListener("click", (event) => {
       if (state.suppressNextOpen) return;
       event.stopPropagation();
-      openItem(itemEl.dataset.openItem);
+      openItem(itemEl.dataset.openItem, state);
     });
   });
 }
@@ -529,7 +534,7 @@ function renderDayView(state) {
   state.viewContainer.querySelectorAll("[data-open-item]").forEach((itemEl) => {
     itemEl.addEventListener("click", () => {
       if (state.suppressNextOpen) return;
-      openItem(itemEl.dataset.openItem);
+      openItem(itemEl.dataset.openItem, state);
     });
   });
 }
@@ -576,7 +581,7 @@ function getRenderableItems(state) {
   return items;
 }
 
-export async function renderCalendarScreen({ viewContainer, currentUserId }) {
+export async function renderCalendarScreen({ viewContainer, currentUserId, initialView, initialDate }) {
   const [{ tasks, leads }, pipelineSettings] = await Promise.all([
     getCalendarData(currentUserId),
     getPipelineSettings(currentUserId),
@@ -585,8 +590,8 @@ export async function renderCalendarScreen({ viewContainer, currentUserId }) {
   const state = {
     viewContainer,
     currentUserId,
-    focusedDate: startOfDay(new Date()),
-    view: VIEW_MONTH,
+    focusedDate: startOfDay(initialDate || new Date()),
+    view: initialView || VIEW_MONTH,
     items: normalizeCalendarItems(tasks, leads),
     leads,
     pipelineSettings,
