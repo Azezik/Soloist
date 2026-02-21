@@ -25,11 +25,11 @@ export async function getCalendarData(currentUserId) {
 
   const tasks = tasksSnapshot.docs
     .map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }))
-    .filter((task) => !task.completed && !task.archived);
+    .filter((task) => task.deleted !== true && !task.completed && !task.archived);
 
   const leads = leadsSnapshot.docs
     .map((leadDoc) => ({ id: leadDoc.id, ...leadDoc.data() }))
-    .filter((lead) => lead.stageStatus !== "completed" && !lead.archived)
+    .filter((lead) => lead.deleted !== true && lead.stageStatus !== "completed" && !lead.archived)
     .map((lead) => {
       const linkedContact = lead.contactId ? contactsById[lead.contactId] : null;
       return {

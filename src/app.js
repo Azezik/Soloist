@@ -3,7 +3,6 @@ import {
   db,
   addDoc,
   collection,
-  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -15,6 +14,7 @@ import {
   updateDoc,
   where,
 } from "./data/firestore-service.js";
+import { deleteEntity } from "./data/delete-service.js";
 import {
   computeInitialLeadNextActionAt,
   computeNextActionAt,
@@ -52,7 +52,7 @@ function toLocalDayKey(date) {
 }
 
 function isLeadEligibleForNightlyPush(lead, nowDate) {
-  if (!lead || lead.archived) return false;
+  if (!lead || lead.archived || lead.deleted === true) return false;
 
   const status = String(lead.status || "").toLowerCase();
   const stageStatus = String(lead.stageStatus || "").toLowerCase();
@@ -219,12 +219,17 @@ function normalizeBoolean(value) {
   return value === true;
 }
 
+function isActiveRecord(value) {
+  return value?.deleted !== true;
+}
+
 function buildTimelineEventFields(type, values = {}) {
   return {
     type,
     contactId: values.contactId || null,
     status: String(values.status || "open"),
     archived: normalizeBoolean(values.archived),
+    deleted: false,
   };
 }
 
@@ -262,46 +267,61 @@ function routeFromHash() {
     return { page: "dashboard" };
   }
 
-  const hash = window.location.hash.slice(1);
+  const rawHash = window.location.hash.slice(1);
+  const [hash, queryString = ""] = rawHash.split("?");
+  const params = new URLSearchParams(queryString);
   if (hash === "dashboard") return { page: "dashboard" };
   if (hash === "contacts") return { page: "contacts" };
   if (hash === "add-contact") return { page: "add-contact" };
   if (hash === "add-lead") return { page: "add-lead" };
   if (hash === "leads") return { page: "leads" };
   if (hash === "tasks") return { page: "tasks" };
-  if (hash === "calendar") return { page: "calendar" };
+  if (hash === "calendar") return { page: "calendar", params };
   if (hash === "tasks/new") return { page: "add-task" };
   if (hash === "add-task") return { page: "add-task" };
   if (hash === "promotions") return { page: "promotions" };
   if (hash === "settings") return { page: "settings" };
   if (hash.startsWith("contact/") && hash.endsWith("/edit")) {
     const parts = hash.split("/");
-    return { page: "contact-edit", contactId: parts[1] };
+    return { page: "contact-edit", contactId: parts[1], params };
   }
 
   if (hash.startsWith("lead/") && hash.endsWith("/edit")) {
     const parts = hash.split("/");
-    return { page: "lead-edit", leadId: parts[1] };
+    return { page: "lead-edit", leadId: parts[1], params };
   }
 
   if (hash.startsWith("task/") && hash.endsWith("/edit")) {
     const parts = hash.split("/");
-    return { page: "task-edit", taskId: parts[1] };
+    return { page: "task-edit", taskId: parts[1], params };
   }
 
   if (hash.startsWith("contact/")) {
-    return { page: "contact-detail", contactId: hash.split("/")[1] };
+    return { page: "contact-detail", contactId: hash.split("/")[1], params };
   }
 
   if (hash.startsWith("lead/")) {
-    return { page: "lead-detail", leadId: hash.split("/")[1] };
+    return { page: "lead-detail", leadId: hash.split("/")[1], params };
   }
 
   if (hash.startsWith("task/")) {
-    return { page: "task-detail", taskId: hash.split("/")[1] };
+    return { page: "task-detail", taskId: hash.split("/")[1], params };
   }
 
   return { page: "dashboard" };
+}
+
+function getCurrentRouteOrigin(params) {
+  return decodeURIComponent(params?.get("from") || "").trim() || null;
+}
+
+function appendOriginToHash(path, originRoute) {
+  if (!originRoute) return path;
+  return `${path}?from=${encodeURIComponent(originRoute)}`;
+}
+
+function navigateAfterDelete(originRoute, fallbackRoute) {
+  window.location.hash = originRoute || fallbackRoute;
 }
 
 function renderLoading(text = "Loading...") {
@@ -346,13 +366,16 @@ async function renderDashboard() {
   ]);
 
   const contactById = contactsSnapshot.docs.reduce((acc, contactDoc) => {
-    acc[contactDoc.id] = { id: contactDoc.id, ...contactDoc.data() };
+    const value = { id: contactDoc.id, ...contactDoc.data() };
+    if (isActiveRecord(value)) {
+      acc[contactDoc.id] = value;
+    }
     return acc;
   }, {});
 
   const dueLeads = leadsSnapshot.docs
     .map((leadDoc) => ({ id: leadDoc.id, ...leadDoc.data() }))
-    .filter((lead) => lead.stageStatus !== "completed")
+    .filter((lead) => isActiveRecord(lead) && lead.stageStatus !== "completed")
     .map((lead) => {
       const contact = contactById[lead.contactId] || {};
       return {
@@ -367,22 +390,26 @@ async function renderDashboard() {
       };
     });
 
-  const legacyDueLeads = legacyLeadsSnapshot.docs.map((contactDoc) => {
-    const contact = { id: contactDoc.id, ...contactDoc.data() };
-    return {
-      type: "lead",
-      id: contact.id,
-      source: "contacts",
-      contactId: contact.id,
-      title: contact.name || "Unnamed Contact",
-      subtitle: contact.email || contact.phone || "No contact details",
-      stageId: contact.stageId,
-      dueAt: contact.nextActionAt,
-    };
-  });
+  const legacyDueLeads = legacyLeadsSnapshot.docs
+    .map((contactDoc) => {
+      const contact = { id: contactDoc.id, ...contactDoc.data() };
+      if (!isActiveRecord(contact)) return null;
+      return {
+        type: "lead",
+        id: contact.id,
+        source: "contacts",
+        contactId: contact.id,
+        title: contact.name || "Unnamed Contact",
+        subtitle: contact.email || contact.phone || "No contact details",
+        stageId: contact.stageId,
+        dueAt: contact.nextActionAt,
+      };
+    })
+    .filter(Boolean);
 
   const dueTasks = tasksSnapshot.docs.map((taskDoc) => {
     const task = { id: taskDoc.id, ...taskDoc.data() };
+    if (!isActiveRecord(task)) return null;
     const contact = task.contactId ? contactById[task.contactId] : null;
     return {
       type: "task",
@@ -393,7 +420,7 @@ async function renderDashboard() {
       notes: task.notes || "",
       dueAt: task.scheduledFor,
     };
-  });
+  }).filter(Boolean);
 
   const pushOptionsMarkup = pushPresets
     .map(
@@ -481,17 +508,17 @@ async function renderDashboard() {
       if (!feedType || !feedId) return;
 
       if (feedType === "task") {
-        window.location.hash = `#task/${feedId}`;
+        window.location.hash = appendOriginToHash(`#task/${feedId}`, window.location.hash);
         return;
       }
 
       const leadSource = itemEl.dataset.leadSource;
       if (leadSource === "contacts") {
-        window.location.hash = `#contact/${feedId}`;
+        window.location.hash = appendOriginToHash(`#contact/${feedId}`, window.location.hash);
         return;
       }
 
-      window.location.hash = `#lead/${feedId}`;
+      window.location.hash = appendOriginToHash(`#lead/${feedId}`, window.location.hash);
     };
 
     itemEl.addEventListener("click", (event) => {
@@ -616,8 +643,12 @@ async function renderContactsPage() {
     getDocs(collection(db, "users", currentUser.uid, "tasks")),
   ]);
 
-  const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
-  const tasks = tasksSnapshot.docs.map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }));
+  const contacts = contactsSnapshot.docs
+    .map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }))
+    .filter((contact) => isActiveRecord(contact));
+  const tasks = tasksSnapshot.docs
+    .map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }))
+    .filter((task) => isActiveRecord(task));
 
   const taskCountByContact = tasks.reduce((acc, task) => {
     if (!task.contactId) return acc;
@@ -684,7 +715,7 @@ async function renderContactsPage() {
 
     listEl.querySelectorAll("[data-contact-id]").forEach((itemEl) => {
       itemEl.addEventListener("click", () => {
-        window.location.hash = `#contact/${itemEl.dataset.contactId}`;
+        window.location.hash = appendOriginToHash(`#contact/${itemEl.dataset.contactId}`, window.location.hash);
       });
     });
   }
@@ -1009,7 +1040,9 @@ async function renderAddLeadForm() {
     getPipelineSettings(currentUser.uid),
     getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
   ]);
-  const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+  const contacts = contactsSnapshot.docs
+    .map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }))
+    .filter((contact) => isActiveRecord(contact));
   const firstStageId = pipelineSettings.stages[0]?.id || "stage1";
 
   renderLeadForm({
@@ -1069,7 +1102,9 @@ async function renderAddTaskForm() {
     query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))
   );
 
-  const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+  const contacts = contactsSnapshot.docs
+    .map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }))
+    .filter((contact) => isActiveRecord(contact));
 
   renderTaskForm({
     mode: "create",
@@ -1110,6 +1145,7 @@ async function renderLeadsPage() {
 
   const leads = leadsSnapshot.docs
     .map((leadDoc) => ({ id: leadDoc.id, ...leadDoc.data() }))
+    .filter((lead) => isActiveRecord(lead))
     .sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0));
 
   viewContainer.innerHTML = `
@@ -1147,7 +1183,7 @@ async function renderLeadsPage() {
 
   viewContainer.querySelectorAll("[data-lead-id]").forEach((leadEl) => {
     leadEl.addEventListener("click", () => {
-      window.location.hash = `#lead/${leadEl.dataset.leadId}`;
+      window.location.hash = appendOriginToHash(`#lead/${leadEl.dataset.leadId}`, window.location.hash);
     });
   });
 }
@@ -1165,7 +1201,9 @@ async function renderTasksPage() {
     return acc;
   }, {});
 
-  const allTasks = tasksSnapshot.docs.map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }));
+  const allTasks = tasksSnapshot.docs
+    .map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }))
+    .filter((task) => isActiveRecord(task));
 
   const getTaskLastSavedTime = (task) =>
     Math.max(toDate(task.updatedAt)?.getTime() || 0, toDate(task.createdAt)?.getTime() || 0);
@@ -1229,13 +1267,15 @@ async function renderTasksPage() {
 
   viewContainer.querySelectorAll("[data-task-id]").forEach((taskEl) => {
     taskEl.addEventListener("click", () => {
-      window.location.hash = `#task/${taskEl.dataset.taskId}`;
+      window.location.hash = appendOriginToHash(`#task/${taskEl.dataset.taskId}`, window.location.hash);
     });
   });
 }
 
 async function renderTaskDetail(taskId) {
   renderLoading("Loading task details...");
+  const route = routeFromHash();
+  const originRoute = getCurrentRouteOrigin(route.params);
 
   const taskRef = doc(db, "users", currentUser.uid, "tasks", taskId);
   const [taskSnapshot, contactsSnapshot, taskNotesSnapshot] = await Promise.all([
@@ -1250,7 +1290,13 @@ async function renderTaskDetail(taskId) {
   }
 
   const task = { id: taskSnapshot.id, ...taskSnapshot.data() };
-  const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+  if (!isActiveRecord(task)) {
+    viewContainer.innerHTML = '<p class="view-message">Task not found.</p>';
+    return;
+  }
+  const contacts = contactsSnapshot.docs
+    .map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }))
+    .filter((contact) => isActiveRecord(contact));
   const linkedContact = contacts.find((contact) => contact.id === task.contactId) || null;
   const taskNotes = taskNotesSnapshot.docs
     .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
@@ -1288,7 +1334,7 @@ async function renderTaskDetail(taskId) {
   `;
 
   document.getElementById("edit-task-btn")?.addEventListener("click", () => {
-    window.location.hash = `#task/${taskId}/edit`;
+    window.location.hash = appendOriginToHash(`#task/${taskId}/edit`, originRoute);
   });
 
   document.getElementById("task-note-form")?.addEventListener("submit", async (event) => {
@@ -1324,6 +1370,8 @@ async function renderTaskDetail(taskId) {
 async function renderEditTaskForm(taskId) {
   renderLoading("Loading task form...");
 
+  const route = routeFromHash();
+  const originRoute = getCurrentRouteOrigin(route.params);
   const taskRef = doc(db, "users", currentUser.uid, "tasks", taskId);
   const [taskSnapshot, contactsSnapshot] = await Promise.all([
     getDoc(taskRef),
@@ -1336,7 +1384,14 @@ async function renderEditTaskForm(taskId) {
   }
 
   const task = { id: taskSnapshot.id, ...taskSnapshot.data() };
-  const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+  if (!isActiveRecord(task)) {
+    viewContainer.innerHTML = '<p class="view-message">Task not found.</p>';
+    return;
+  }
+  const contacts = contactsSnapshot.docs
+    .map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }))
+    .filter((contact) => isActiveRecord(contact));
+  const taskDetailRoute = appendOriginToHash(`#task/${taskId}`, originRoute);
 
   renderTaskForm({
     mode: "edit",
@@ -1351,24 +1406,22 @@ async function renderEditTaskForm(taskId) {
         summary: values.notes || "",
         updatedAt: serverTimestamp(),
       });
-      window.location.hash = `#task/${taskId}`;
+      window.location.hash = taskDetailRoute;
     },
     onCancel: async () => {
-      window.location.hash = `#task/${taskId}`;
+      window.location.hash = taskDetailRoute;
     },
     onDelete: async () => {
-      await updateDoc(taskRef, {
-        archived: true,
-        status: "archived",
-        updatedAt: serverTimestamp(),
-      });
-      window.location.hash = "#tasks";
+      await deleteEntity("task", taskId, { currentUserId: currentUser.uid, deletedBy: currentUser.uid });
+      navigateAfterDelete(originRoute, "#tasks");
     },
   });
 }
 
 async function renderLeadDetail(leadId) {
   renderLoading("Loading lead details...");
+  const route = routeFromHash();
+  const originRoute = getCurrentRouteOrigin(route.params);
 
   const leadRef = doc(db, "users", currentUser.uid, "leads", leadId);
   const [pipelineSettings, leadSnapshot, contactsSnapshot, leadNotesSnapshot] = await Promise.all([
@@ -1384,7 +1437,13 @@ async function renderLeadDetail(leadId) {
   }
 
   const lead = { id: leadSnapshot.id, ...leadSnapshot.data() };
-  const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+  if (!isActiveRecord(lead)) {
+    viewContainer.innerHTML = '<p class="view-message">Lead not found.</p>';
+    return;
+  }
+  const contacts = contactsSnapshot.docs
+    .map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }))
+    .filter((contact) => isActiveRecord(contact));
   const linkedContact = contacts.find((contact) => contact.id === lead.contactId) || null;
   const leadNotes = leadNotesSnapshot.docs
     .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
@@ -1426,7 +1485,7 @@ async function renderLeadDetail(leadId) {
   `;
 
   document.getElementById("edit-lead-btn")?.addEventListener("click", () => {
-    window.location.hash = `#lead/${leadId}/edit`;
+    window.location.hash = appendOriginToHash(`#lead/${leadId}/edit`, originRoute);
   });
 
   document.getElementById("lead-note-form")?.addEventListener("submit", async (event) => {
@@ -1458,6 +1517,8 @@ async function renderLeadDetail(leadId) {
 async function renderEditLeadForm(leadId) {
   renderLoading("Loading lead form...");
 
+  const route = routeFromHash();
+  const originRoute = getCurrentRouteOrigin(route.params);
   const leadRef = doc(db, "users", currentUser.uid, "leads", leadId);
   const [pipelineSettings, leadSnapshot, contactsSnapshot] = await Promise.all([
     getPipelineSettings(currentUser.uid),
@@ -1471,8 +1532,15 @@ async function renderEditLeadForm(leadId) {
   }
 
   const lead = { id: leadSnapshot.id, ...leadSnapshot.data() };
-  const contacts = contactsSnapshot.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+  if (!isActiveRecord(lead)) {
+    viewContainer.innerHTML = '<p class="view-message">Lead not found.</p>';
+    return;
+  }
+  const contacts = contactsSnapshot.docs
+    .map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }))
+    .filter((contact) => isActiveRecord(contact));
   const linkedContact = contacts.find((contact) => contact.id === lead.contactId) || null;
+  const leadDetailRoute = appendOriginToHash(`#lead/${leadId}`, originRoute);
 
   renderLeadForm({
     mode: "edit",
@@ -1519,24 +1587,22 @@ async function renderEditLeadForm(leadId) {
         nextActionAt: computedNextActionAt,
         updatedAt: serverTimestamp(),
       });
-      window.location.hash = `#lead/${leadId}`;
+      window.location.hash = leadDetailRoute;
     },
     onCancel: async () => {
-      window.location.hash = `#lead/${leadId}`;
+      window.location.hash = leadDetailRoute;
     },
     onDelete: async () => {
-      await updateDoc(leadRef, {
-        archived: true,
-        status: "archived",
-        updatedAt: serverTimestamp(),
-      });
-      window.location.hash = "#dashboard";
+      await deleteEntity("lead", leadId, { currentUserId: currentUser.uid, deletedBy: currentUser.uid });
+      navigateAfterDelete(originRoute, "#dashboard");
     },
   });
 }
 
 async function renderContactDetail(contactId) {
   renderLoading("Loading contact details...");
+  const route = routeFromHash();
+  const originRoute = getCurrentRouteOrigin(route.params);
 
   const contactRef = doc(db, "users", currentUser.uid, "contacts", contactId);
   const [contactSnapshot, tasksSnapshot, leadsSnapshot, notesSnapshot] = await Promise.all([
@@ -1551,14 +1617,22 @@ async function renderContactDetail(contactId) {
     return;
   }
 
-  const contact = contactSnapshot.data();
-  const tasks = tasksSnapshot.docs.map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }));
-  const leads = leadsSnapshot.docs.map((leadDoc) => ({ id: leadDoc.id, ...leadDoc.data() }));
+  const contact = { id: contactSnapshot.id, ...contactSnapshot.data() };
+  if (!isActiveRecord(contact)) {
+    viewContainer.innerHTML = '<p class="view-message">Contact not found.</p>';
+    return;
+  }
+  const tasks = tasksSnapshot.docs
+    .map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }))
+    .filter((task) => isActiveRecord(task));
+  const leads = leadsSnapshot.docs
+    .map((leadDoc) => ({ id: leadDoc.id, ...leadDoc.data() }))
+    .filter((lead) => isActiveRecord(lead));
   const notes = notesSnapshot.docs.map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }));
 
   const timeline = [
-    ...leads.map((lead) => ({ kind: "lead", when: lead.createdAt, label: `Lead ${lead.archived ? "Closed" : "Created"}`, detail: lead.title || lead.summary || "Lead activity", href: `#lead/${lead.id}` })),
-    ...tasks.map((task) => ({ kind: "task", when: task.createdAt, label: `Task ${task.completed ? "Completed" : "Created"}`, detail: task.title || "Task activity", href: `#task/${task.id}` })),
+    ...leads.map((lead) => ({ kind: "lead", when: lead.createdAt, label: `Lead ${lead.archived ? "Closed" : "Created"}`, detail: lead.title || lead.summary || "Lead activity", href: appendOriginToHash(`#lead/${lead.id}`, window.location.hash) })),
+    ...tasks.map((task) => ({ kind: "task", when: task.createdAt, label: `Task ${task.completed ? "Completed" : "Created"}`, detail: task.title || "Task activity", href: appendOriginToHash(`#task/${task.id}`, window.location.hash) })),
     ...notes.map((note) => ({ kind: "note", when: note.createdAt, label: "Note", detail: note.noteText, href: null })),
   ].sort((a, b) => (toDate(a.when)?.getTime() || 0) - (toDate(b.when)?.getTime() || 0));
 
@@ -1598,7 +1672,7 @@ async function renderContactDetail(contactId) {
   `;
 
   document.getElementById("edit-contact-btn")?.addEventListener("click", () => {
-    window.location.hash = `#contact/${contactId}/edit`;
+    window.location.hash = appendOriginToHash(`#contact/${contactId}/edit`, originRoute);
   });
 
   document.getElementById("add-note-form")?.addEventListener("submit", async (event) => {
@@ -1624,6 +1698,8 @@ async function renderContactDetail(contactId) {
 async function renderEditContactForm(contactId) {
   renderLoading("Loading contact form...");
 
+  const route = routeFromHash();
+  const originRoute = getCurrentRouteOrigin(route.params);
   const contactRef = doc(db, "users", currentUser.uid, "contacts", contactId);
   const contactSnapshot = await getDoc(contactRef);
 
@@ -1633,6 +1709,11 @@ async function renderEditContactForm(contactId) {
   }
 
   const contact = { id: contactSnapshot.id, ...contactSnapshot.data() };
+  if (!isActiveRecord(contact)) {
+    viewContainer.innerHTML = '<p class="view-message">Contact not found.</p>';
+    return;
+  }
+  const contactDetailRoute = appendOriginToHash(`#contact/${contactId}`, originRoute);
 
   renderContactForm({
     mode: "edit",
@@ -1642,14 +1723,14 @@ async function renderEditContactForm(contactId) {
         ...values,
         updatedAt: serverTimestamp(),
       });
-      window.location.hash = `#contact/${contactId}`;
+      window.location.hash = contactDetailRoute;
     },
     onCancel: async () => {
-      window.location.hash = `#contact/${contactId}`;
+      window.location.hash = contactDetailRoute;
     },
     onDelete: async () => {
-      await deleteDoc(contactRef);
-      window.location.hash = "#contacts";
+      await deleteEntity("contact", contactId, { currentUserId: currentUser.uid, deletedBy: currentUser.uid });
+      navigateAfterDelete(originRoute, "#contacts");
     },
   });
 }
@@ -1827,7 +1908,15 @@ async function renderCurrentRoute() {
     }
 
     if (route.page === "calendar") {
-      await renderCalendarScreen({ viewContainer, currentUserId: currentUser.uid });
+      const initialView = ["month", "week", "day"].includes(route.params?.get("view")) ? route.params.get("view") : undefined;
+      const initialDateRaw = route.params?.get("date");
+      const initialDate = initialDateRaw ? new Date(`${initialDateRaw}T00:00:00`) : undefined;
+      await renderCalendarScreen({
+        viewContainer,
+        currentUserId: currentUser.uid,
+        initialView,
+        initialDate: Number.isNaN(initialDate?.getTime?.()) ? undefined : initialDate,
+      });
       return;
     }
 
