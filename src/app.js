@@ -26,6 +26,7 @@ import {
   sanitizeTimeString,
 } from "./domain/settings.js";
 import { getAppSettings, getPipelineSettings, pipelineSettingsRef } from "./data/settings-service.js";
+import { renderCalendarScreen } from "./calendar/calendar-screen.js";
 
 const statusEl = document.getElementById("auth-status");
 const emailEl = document.getElementById("email");
@@ -161,6 +162,7 @@ function routeFromHash() {
   if (hash === "add-lead") return { page: "add-lead" };
   if (hash === "leads") return { page: "leads" };
   if (hash === "tasks") return { page: "tasks" };
+  if (hash === "calendar") return { page: "calendar" };
   if (hash === "tasks/new") return { page: "add-task" };
   if (hash === "add-task") return { page: "add-task" };
   if (hash === "promotions") return { page: "promotions" };
@@ -1712,6 +1714,11 @@ async function renderCurrentRoute() {
 
     if (route.page === "tasks") {
       await renderTasksPage();
+      return;
+    }
+
+    if (route.page === "calendar") {
+      await renderCalendarScreen({ viewContainer, currentUserId: currentUser.uid });
       return;
     }
 
