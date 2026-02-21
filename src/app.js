@@ -27,6 +27,7 @@ import {
 } from "./domain/settings.js";
 import { getAppSettings, getPipelineSettings, pipelineSettingsRef } from "./data/settings-service.js";
 import { renderCalendarScreen } from "./calendar/calendar-screen.js";
+import { rescheduleLeadAction } from "./data/calendar-service.js";
 
 const statusEl = document.getElementById("auth-status");
 const emailEl = document.getElementById("email");
@@ -39,6 +40,103 @@ const appPage = document.getElementById("app-page");
 const viewContainer = document.getElementById("view-container");
 
 let currentUser = null;
+let nightlyRolloverTimerId = null;
+const NIGHTLY_ROLLOVER_HOUR = 23;
+const NIGHTLY_ROLLOVER_MINUTE = 59;
+
+function toLocalDayKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isLeadEligibleForNightlyPush(lead, nowDate) {
+  if (!lead || lead.archived) return false;
+
+  const status = String(lead.status || "").toLowerCase();
+  const stageStatus = String(lead.stageStatus || "").toLowerCase();
+  if (status === "closed" || status === "completed" || status === "done") return false;
+  if (stageStatus === "completed" || stageStatus === "done") return false;
+
+  const nextActionDate = toDate(lead.nextActionAt);
+  if (!nextActionDate) return false;
+
+  return nextActionDate.getTime() <= nowDate.getTime();
+}
+
+async function runNightlyRolloverIfDue() {
+  if (!currentUser) return false;
+
+  const nowDate = new Date();
+  const reachedCutoff =
+    nowDate.getHours() > NIGHTLY_ROLLOVER_HOUR ||
+    (nowDate.getHours() === NIGHTLY_ROLLOVER_HOUR && nowDate.getMinutes() >= NIGHTLY_ROLLOVER_MINUTE);
+
+  if (!reachedCutoff) return false;
+
+  const dayKey = toLocalDayKey(nowDate);
+  const rolloverStateRef = doc(db, "users", currentUser.uid, "settings", "nightlyRollover");
+  const [rolloverStateSnapshot, appSettings, leadsSnapshot] = await Promise.all([
+    getDoc(rolloverStateRef),
+    getAppSettings(currentUser.uid),
+    getDocs(collection(db, "users", currentUser.uid, "leads")),
+  ]);
+
+  if (rolloverStateSnapshot.exists() && rolloverStateSnapshot.data()?.lastRunDayKey === dayKey) {
+    return false;
+  }
+
+  const nextActionAtDate = computeNextActionAt(nowDate, 1, appSettings.pipeline.dayStartTime).toDate();
+  const eligibleLeads = leadsSnapshot.docs
+    .map((leadDoc) => ({ id: leadDoc.id, ...leadDoc.data() }))
+    .filter((lead) => isLeadEligibleForNightlyPush(lead, nowDate));
+
+  await Promise.all(eligibleLeads.map((lead) => rescheduleLeadAction(currentUser.uid, lead.id, nextActionAtDate)));
+
+  await setDoc(
+    rolloverStateRef,
+    {
+      lastRunDayKey: dayKey,
+      lastRunAt: serverTimestamp(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return eligibleLeads.length > 0;
+}
+
+function scheduleNightlyRollover() {
+  if (nightlyRolloverTimerId) {
+    window.clearTimeout(nightlyRolloverTimerId);
+    nightlyRolloverTimerId = null;
+  }
+
+  if (!currentUser) return;
+
+  const nowDate = new Date();
+  const nextRunAt = new Date(nowDate);
+  nextRunAt.setHours(NIGHTLY_ROLLOVER_HOUR, NIGHTLY_ROLLOVER_MINUTE, 0, 0);
+
+  if (nextRunAt.getTime() <= nowDate.getTime()) {
+    nextRunAt.setDate(nextRunAt.getDate() + 1);
+  }
+
+  nightlyRolloverTimerId = window.setTimeout(async () => {
+    try {
+      const didApplyRollover = await runNightlyRolloverIfDue();
+      if (didApplyRollover) {
+        await renderCurrentRoute();
+      }
+    } catch (error) {
+      console.error("Nightly rollover failed:", error);
+    } finally {
+      scheduleNightlyRollover();
+    }
+  }, Math.max(1, nextRunAt.getTime() - nowDate.getTime()));
+}
 
 function setStatus(message) {
   statusEl.textContent = message;
@@ -494,11 +592,15 @@ async function renderDashboard() {
         });
       } else {
         if (!leadSource) return;
-        await updateDoc(doc(db, "users", currentUser.uid, leadSource, entityId), {
-          nextActionAt: pushedAt,
-          lastActionAt: Timestamp.now(),
-          updatedAt: serverTimestamp(),
-        });
+        if (leadSource === "leads") {
+          await rescheduleLeadAction(currentUser.uid, entityId, pushedAt.toDate());
+        } else {
+          await updateDoc(doc(db, "users", currentUser.uid, leadSource, entityId), {
+            nextActionAt: pushedAt,
+            lastActionAt: Timestamp.now(),
+            updatedAt: serverTimestamp(),
+          });
+        }
       }
 
       await renderDashboard();
@@ -1826,8 +1928,14 @@ onAuthStateChanged(auth, async (user) => {
       window.location.hash = "#dashboard";
     }
 
+    await runNightlyRolloverIfDue();
+    scheduleNightlyRollover();
     await renderCurrentRoute();
   } else {
+    if (nightlyRolloverTimerId) {
+      window.clearTimeout(nightlyRolloverTimerId);
+      nightlyRolloverTimerId = null;
+    }
     authPage.classList.remove("hidden");
     appPage.classList.add("hidden");
     setStatus("Please log in to continue.");
