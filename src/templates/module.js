@@ -47,7 +47,8 @@ function renderTemplateWithLead(templateConfig, leadContactName = "") {
     parts.push(outroText);
   }
 
-  return parts.join("\n\n");
+  const assembledTemplate = parts.join("\n\n").trimEnd();
+  return assembledTemplate ? `${assembledTemplate}\n` : "";
 }
 
 function buildStageTemplateSettingsMarkup(stage, index, escapeHtml) {
