@@ -1,14 +1,14 @@
 import { Timestamp } from "../data/firestore-service.js";
-import { DEFAULT_STAGE_TEMPLATE, normalizeStageTemplateConfig } from "../templates/module.js";
+import { DEFAULT_STAGE_TEMPLATE, DEFAULT_STAGE_TEMPLATE_NAME, normalizeStageTemplates } from "../templates/module.js";
 
 const DEFAULT_PIPELINE_SETTINGS = {
   dayStartTime: "08:30",
   stages: [
-    { id: "stage1", label: "Stage 1", offsetDays: 0, ...DEFAULT_STAGE_TEMPLATE },
-    { id: "stage2", label: "Stage 2", offsetDays: 2, ...DEFAULT_STAGE_TEMPLATE },
-    { id: "stage3", label: "Stage 3", offsetDays: 7, ...DEFAULT_STAGE_TEMPLATE },
-    { id: "stage4", label: "Stage 4", offsetDays: 15, ...DEFAULT_STAGE_TEMPLATE },
-    { id: "stage5", label: "Stage 5", offsetDays: 30, ...DEFAULT_STAGE_TEMPLATE },
+    { id: "stage1", label: "Stage 1", offsetDays: 0, templates: [{ id: "stage1-template-1", name: DEFAULT_STAGE_TEMPLATE_NAME, order: 0, ...DEFAULT_STAGE_TEMPLATE }] },
+    { id: "stage2", label: "Stage 2", offsetDays: 2, templates: [{ id: "stage2-template-1", name: DEFAULT_STAGE_TEMPLATE_NAME, order: 0, ...DEFAULT_STAGE_TEMPLATE }] },
+    { id: "stage3", label: "Stage 3", offsetDays: 7, templates: [{ id: "stage3-template-1", name: DEFAULT_STAGE_TEMPLATE_NAME, order: 0, ...DEFAULT_STAGE_TEMPLATE }] },
+    { id: "stage4", label: "Stage 4", offsetDays: 15, templates: [{ id: "stage4-template-1", name: DEFAULT_STAGE_TEMPLATE_NAME, order: 0, ...DEFAULT_STAGE_TEMPLATE }] },
+    { id: "stage5", label: "Stage 5", offsetDays: 30, templates: [{ id: "stage5-template-1", name: DEFAULT_STAGE_TEMPLATE_NAME, order: 0, ...DEFAULT_STAGE_TEMPLATE }] },
   ],
 };
 
@@ -33,7 +33,7 @@ function cloneDefaultPushPresets() {
 function cloneDefaultPipelineSettings() {
   return {
     dayStartTime: DEFAULT_PIPELINE_SETTINGS.dayStartTime,
-    stages: DEFAULT_PIPELINE_SETTINGS.stages.map((stage) => ({ ...stage })),
+    stages: DEFAULT_PIPELINE_SETTINGS.stages.map((stage) => ({ ...stage, templates: stage.templates.map((template) => ({ ...template })) })),
   };
 }
 
@@ -70,18 +70,18 @@ function normalizePipelineSettings(input) {
         id: `stage${index + 1}`,
         label: `Stage ${index + 1}`,
         offsetDays: index,
-        ...DEFAULT_STAGE_TEMPLATE,
+        templates: normalizeStageTemplates({ id: `stage${index + 1}` }),
       };
 
       const parsedOffset = Number.parseInt(stage?.offsetDays, 10);
 
-      const templateConfig = normalizeStageTemplateConfig(stage, fallbackStage);
+      const templates = normalizeStageTemplates(stage, fallbackStage);
 
       return {
         id: String(stage?.id || fallbackStage.id),
         label: String(stage?.label || fallbackStage.label),
         offsetDays: Number.isNaN(parsedOffset) ? fallbackStage.offsetDays : parsedOffset,
-        ...templateConfig,
+        templates,
       };
     }),
   };

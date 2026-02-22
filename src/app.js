@@ -28,7 +28,15 @@ import {
 import { getAppSettings, getPipelineSettings, pipelineSettingsRef } from "./data/settings-service.js";
 import { renderCalendarScreen } from "./calendar/calendar-screen.js";
 import { rescheduleLeadAction } from "./data/calendar-service.js";
-import { LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER, buildStageTemplateSettingsMarkup, normalizeStageTemplateConfig, renderTemplateWithLead } from "./templates/module.js";
+import {
+  DEFAULT_STAGE_TEMPLATE,
+  LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER,
+  buildStageTemplateSettingsMarkup,
+  buildTemplateId,
+  normalizeStageTemplateEntry,
+  normalizeStageTemplates,
+  renderTemplateWithLead,
+} from "./templates/module.js";
 
 const statusEl = document.getElementById("auth-status");
 const emailEl = document.getElementById("email");
@@ -1529,10 +1537,8 @@ async function renderLeadDetail(leadId) {
     .filter((contact) => isActiveRecord(contact));
   const linkedContact = contacts.find((contact) => contact.id === lead.contactId) || null;
   const currentStage = getStageById(pipelineSettings, lead.stageId) || pipelineSettings.stages[0] || null;
-  const stageTemplate = normalizeStageTemplateConfig(currentStage || {});
-  const hasTemplateBody = stageTemplate.bodyText.trim().length > 0;
-  const assembledTemplateText = renderTemplateWithLead(stageTemplate, linkedContact?.name || "");
-  const templateOutputText = hasTemplateBody ? assembledTemplateText : "";
+  const stageTemplates = normalizeStageTemplates(currentStage || {});
+  const selectedTemplate = stageTemplates[0] || normalizeStageTemplateEntry(DEFAULT_STAGE_TEMPLATE);
   const leadEmail = String(linkedContact?.email || "").trim();
   const stageLabel = currentStage?.label || "Unknown stage";
   const leadNotes = leadNotesSnapshot.docs
@@ -1576,8 +1582,18 @@ async function renderLeadDetail(leadId) {
 
       <div class="panel panel--lead notes-panel">
         <h3>Template: ${escapeHtml(stageLabel)}</h3>
+        <label class="full-width">Select template
+          <select id="lead-template-select" ${stageTemplates.length <= 1 ? "disabled" : ""}>
+            ${stageTemplates
+              .map(
+                (template) =>
+                  `<option value="${escapeHtml(template.id)}" ${template.id === selectedTemplate.id ? "selected" : ""}>${escapeHtml(template.name || "Untitled template")}</option>`
+              )
+              .join("")}
+          </select>
+        </label>
         <label class="full-width">Generated template
-          <textarea rows="8" readonly class="lead-template-output ${hasTemplateBody ? "" : "lead-template-output--placeholder"}" placeholder="${escapeHtml(LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER)}">${escapeHtml(templateOutputText)}</textarea>
+          <textarea id="lead-template-output" rows="8" readonly class="lead-template-output" placeholder="${escapeHtml(LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER)}"></textarea>
         </label>
         <div class="button-row full-width">
           <button
@@ -1585,11 +1601,10 @@ async function renderLeadDetail(leadId) {
             id="lead-open-mail-btn"
             ${leadEmail ? `data-mail-to="${escapeHtml(leadEmail)}"` : "disabled"}
             data-mail-subject="${escapeHtml(`smolCRM - ${stageLabel}`)}"
-            data-mail-body="${escapeHtml(templateOutputText)}"
           >
             Open in mail
           </button>
-          <button type="button" ${hasTemplateBody ? `data-copy-text="${escapeHtml(assembledTemplateText)}"` : "disabled"}>Copy template</button>
+          <button type="button" id="lead-copy-template-btn">Copy template</button>
         </div>
       </div>
     </section>
@@ -1624,7 +1639,39 @@ async function renderLeadDetail(leadId) {
     await renderLeadDetail(leadId);
   });
 
-  document.getElementById("lead-open-mail-btn")?.addEventListener("click", (event) => {
+  let currentTemplate = selectedTemplate;
+  const templateSelectEl = document.getElementById("lead-template-select");
+  const templateOutputEl = document.getElementById("lead-template-output");
+  const leadCopyTemplateBtn = document.getElementById("lead-copy-template-btn");
+  const leadOpenMailBtn = document.getElementById("lead-open-mail-btn");
+
+  function updateLeadTemplateOutput() {
+    const assembledTemplateText = renderTemplateWithLead(currentTemplate, linkedContact?.name || "");
+    const hasTemplateBody = currentTemplate.bodyText.trim().length > 0;
+    const templateOutputText = hasTemplateBody ? assembledTemplateText : "";
+
+    if (templateOutputEl) {
+      templateOutputEl.value = templateOutputText;
+      templateOutputEl.classList.toggle("lead-template-output--placeholder", !hasTemplateBody);
+    }
+
+    if (leadCopyTemplateBtn) {
+      leadCopyTemplateBtn.dataset.copyText = assembledTemplateText;
+      leadCopyTemplateBtn.disabled = !hasTemplateBody;
+    }
+
+    if (leadOpenMailBtn) {
+      leadOpenMailBtn.dataset.mailBody = templateOutputText;
+    }
+  }
+
+  templateSelectEl?.addEventListener("change", () => {
+    const selectedId = String(templateSelectEl.value || "");
+    currentTemplate = stageTemplates.find((template) => template.id === selectedId) || stageTemplates[0] || currentTemplate;
+    updateLeadTemplateOutput();
+  });
+
+  leadOpenMailBtn?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     const mailButton = event.currentTarget;
@@ -1639,6 +1686,7 @@ async function renderLeadDetail(leadId) {
     window.location.href = mailtoUrl;
   });
 
+  updateLeadTemplateOutput();
   attachClipboardHandlers();
 }
 
@@ -1876,131 +1924,221 @@ function renderPlaceholder(title) {
 async function renderSettingsPage() {
   renderLoading("Loading settings...");
 
-  const appSettings = await getAppSettings(currentUser.uid);
-  const pipelineSettings = appSettings.pipeline;
-  const pushPresets = appSettings.pushPresets;
+  let appSettings = await getAppSettings(currentUser.uid);
+  let editableSettings = normalizeAppSettings(appSettings);
 
-  viewContainer.innerHTML = `
-    <section>
-      <div class="view-header"><h2>Settings</h2></div>
-      <form id="pipeline-settings-form" class="panel form-grid">
-        <h3>Pipeline Settings</h3>
-        <label>Day Start Time (HH:MM)
-          <input name="dayStartTime" type="time" value="${pipelineSettings.dayStartTime}" required />
-        </label>
+  function readStageTemplatesFromForm(formEl, stageIndex, stage) {
+    const stageTemplates = normalizeStageTemplates(stage);
 
-        ${pipelineSettings.stages
-          .map(
-            (stage, index) => `
-              <div class="panel detail-grid">
-                <p><strong>${escapeHtml(stage.label)}</strong></p>
-                <label>Offset Days
-                  <input type="number" step="1" name="offset-${index}" value="${stage.offsetDays}" required />
-                </label>
-                ${buildStageTemplateSettingsMarkup(stage, index, escapeHtml)}
-              </div>
-            `
-          )
-          .join("")}
-
-        <h3>Dashboard Push Presets</h3>
-        ${pushPresets
-          .map((preset, index) => {
-            const behavior = preset.behavior || {};
-            return `
-              <div class="panel detail-grid">
-                <p><strong>Preset ${index + 1}</strong></p>
-                <label>Label
-                  <input name="push-label-${index}" value="${escapeHtml(preset.label)}" required />
-                </label>
-                <label>Behavior
-                  <select name="push-type-${index}">
-                    <option value="addHours" ${behavior.type === "addHours" ? "selected" : ""}>Add hours from now</option>
-                    <option value="nextTime" ${behavior.type === "nextTime" ? "selected" : ""}>Next time (today/tomorrow)</option>
-                    <option value="nextWeekdayTime" ${behavior.type === "nextWeekdayTime" ? "selected" : ""}>Next weekday at time</option>
-                  </select>
-                </label>
-                <label>Hours (for "Add hours")
-                  <input type="number" min="1" step="1" name="push-hours-${index}" value="${behavior.type === "addHours" ? behavior.hours : 1}" />
-                </label>
-                <label>Time (for next time/day)
-                  <input type="time" name="push-time-${index}" value="${sanitizeTimeString(behavior.time || "08:30")}" />
-                </label>
-                <label>Weekday (for next weekday)
-                  <select name="push-weekday-${index}">
-                    ${[
-                      [0, "Sunday"],
-                      [1, "Monday"],
-                      [2, "Tuesday"],
-                      [3, "Wednesday"],
-                      [4, "Thursday"],
-                      [5, "Friday"],
-                      [6, "Saturday"],
-                    ]
-                      .map(
-                        ([value, label]) =>
-                          `<option value="${value}" ${behavior.weekday === value ? "selected" : ""}>${label}</option>`
-                      )
-                      .join("")}
-                  </select>
-                </label>
-              </div>
-            `;
-          })
-          .join("")}
-
-        <button type="submit" class="full-width">Save Settings</button>
-      </form>
-    </section>
-  `;
-
-  document.getElementById("pipeline-settings-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-
-    const formData = new FormData(event.currentTarget);
-    const dayStartTime = sanitizeTimeString(String(formData.get("dayStartTime") || "08:30"));
-    const stages = pipelineSettings.stages.map((stage, index) => {
-      const templateDefaults = normalizeStageTemplateConfig(stage);
+    return stageTemplates.map((template, templateIndex) => {
+      const templateDefaults = normalizeStageTemplateEntry(template, { stageId: stage.id, templateIndex });
       return {
-        ...stage,
-        offsetDays: Number.parseInt(String(formData.get(`offset-${index}`) || stage.offsetDays), 10),
-        introText: String(formData.get(`template-intro-${index}`) ?? templateDefaults.introText),
-        populateName: formData.get(`template-populate-name-${index}`) === "on",
-        bodyText: String(formData.get(`template-body-${index}`) ?? templateDefaults.bodyText),
-        outroText: String(formData.get(`template-outro-${index}`) ?? templateDefaults.outroText),
+        id: String(formEl.elements[`template-id-${stageIndex}-${templateIndex}`]?.value || templateDefaults.id || buildTemplateId(stage.id, templateIndex)),
+        name: String(formEl.elements[`template-name-${stageIndex}-${templateIndex}`]?.value || templateDefaults.name || `Template ${templateIndex + 1}`).trim() || `Template ${templateIndex + 1}`,
+        introText: String(formEl.elements[`template-intro-${stageIndex}-${templateIndex}`]?.value ?? templateDefaults.introText),
+        populateName: formEl.elements[`template-populate-name-${stageIndex}-${templateIndex}`]?.checked === true,
+        bodyText: String(formEl.elements[`template-body-${stageIndex}-${templateIndex}`]?.value ?? templateDefaults.bodyText),
+        outroText: String(formEl.elements[`template-outro-${stageIndex}-${templateIndex}`]?.value ?? templateDefaults.outroText),
+        order: templateIndex,
       };
     });
+  }
 
-    if (stages.some((stage) => Number.isNaN(stage.offsetDays) || stage.offsetDays < 0)) {
-      alert("Offset days must be a non-negative integer.");
-      return;
-    }
+  function readPipelineFromForm(formEl) {
+    const dayStartTime = sanitizeTimeString(String(formEl.elements.dayStartTime?.value || "08:30"));
+    const stages = editableSettings.pipeline.stages.map((stage, index) => ({
+      ...stage,
+      offsetDays: Number.parseInt(String(formEl.elements[`offset-${index}`]?.value || stage.offsetDays), 10),
+      templates: readStageTemplatesFromForm(formEl, index, stage),
+    }));
 
-    const pushPresetsPayload = pushPresets.map((_, index) => {
-      const label = String(formData.get(`push-label-${index}`) || "").trim() || `Preset ${index + 1}`;
-      const type = String(formData.get(`push-type-${index}`) || "nextTime");
-      const hours = Number.parseInt(String(formData.get(`push-hours-${index}`) || "1"), 10);
-      const time = sanitizeTimeString(String(formData.get(`push-time-${index}`) || "08:30"));
-      const weekday = Number.parseInt(String(formData.get(`push-weekday-${index}`) || "1"), 10);
+    return { dayStartTime, stages };
+  }
 
-      if (type === "addHours") {
-        return { label, behavior: { type, hours } };
-      }
+  function renderSettingsForm() {
+    const pipelineSettings = editableSettings.pipeline;
+    const pushPresets = editableSettings.pushPresets;
 
-      if (type === "nextWeekdayTime") {
-        return { label, behavior: { type, weekday, time } };
-      }
+    viewContainer.innerHTML = `
+      <section>
+        <div class="view-header"><h2>Settings</h2></div>
+        <form id="pipeline-settings-form" class="panel form-grid">
+          <h3>Pipeline Settings</h3>
+          <label>Day Start Time (HH:MM)
+            <input name="dayStartTime" type="time" value="${pipelineSettings.dayStartTime}" required />
+          </label>
 
-      return { label, behavior: { type: "nextTime", time } };
+          ${pipelineSettings.stages
+            .map(
+              (stage, index) => `
+                <div class="panel detail-grid">
+                  <p><strong>${escapeHtml(stage.label)}</strong></p>
+                  <label>Offset Days
+                    <input type="number" step="1" name="offset-${index}" value="${stage.offsetDays}" required />
+                  </label>
+                  ${buildStageTemplateSettingsMarkup(stage, index, escapeHtml)}
+                </div>
+              `
+            )
+            .join("")}
+
+          <h3>Dashboard Push Presets</h3>
+          ${pushPresets
+            .map((preset, index) => {
+              const behavior = preset.behavior || {};
+              return `
+                <div class="panel detail-grid">
+                  <p><strong>Preset ${index + 1}</strong></p>
+                  <label>Label
+                    <input name="push-label-${index}" value="${escapeHtml(preset.label)}" required />
+                  </label>
+                  <label>Behavior
+                    <select name="push-type-${index}">
+                      <option value="addHours" ${behavior.type === "addHours" ? "selected" : ""}>Add hours from now</option>
+                      <option value="nextTime" ${behavior.type === "nextTime" ? "selected" : ""}>Next time (today/tomorrow)</option>
+                      <option value="nextWeekdayTime" ${behavior.type === "nextWeekdayTime" ? "selected" : ""}>Next weekday at time</option>
+                    </select>
+                  </label>
+                  <label>Hours (for "Add hours")
+                    <input type="number" min="1" step="1" name="push-hours-${index}" value="${behavior.type === "addHours" ? behavior.hours : 1}" />
+                  </label>
+                  <label>Time (for next time/day)
+                    <input type="time" name="push-time-${index}" value="${sanitizeTimeString(behavior.time || "08:30")}" />
+                  </label>
+                  <label>Weekday (for next weekday)
+                    <select name="push-weekday-${index}">
+                      ${[
+                        [0, "Sunday"],
+                        [1, "Monday"],
+                        [2, "Tuesday"],
+                        [3, "Wednesday"],
+                        [4, "Thursday"],
+                        [5, "Friday"],
+                        [6, "Saturday"],
+                      ]
+                        .map(
+                          ([value, label]) =>
+                            `<option value="${value}" ${behavior.weekday === value ? "selected" : ""}>${label}</option>`
+                        )
+                        .join("")}
+                    </select>
+                  </label>
+                </div>
+              `;
+            })
+            .join("")}
+
+          <button type="submit" class="full-width">Save Settings</button>
+        </form>
+      </section>
+    `;
+
+    const formEl = document.getElementById("pipeline-settings-form");
+
+    formEl?.addEventListener("click", (event) => {
+      const addTemplateButton = event.target.closest("[data-add-template-stage-index]");
+      if (!addTemplateButton) return;
+
+      const stageIndex = Number.parseInt(addTemplateButton.dataset.addTemplateStageIndex, 10);
+      if (Number.isNaN(stageIndex)) return;
+
+      const pipelineFromForm = readPipelineFromForm(formEl);
+      const nextStages = pipelineFromForm.stages.map((stage, idx) => {
+        if (idx !== stageIndex) return stage;
+        const templateNumber = stage.templates.length + 1;
+        return {
+          ...stage,
+          templates: [
+            ...stage.templates,
+            {
+              id: buildTemplateId(stage.id, stage.templates.length),
+              name: `Template ${templateNumber}`,
+              order: stage.templates.length,
+              ...DEFAULT_STAGE_TEMPLATE,
+            },
+          ],
+        };
+      });
+
+      editableSettings = {
+        ...editableSettings,
+        pipeline: {
+          ...editableSettings.pipeline,
+          dayStartTime: pipelineFromForm.dayStartTime,
+          stages: nextStages,
+        },
+      };
+
+      renderSettingsForm();
     });
 
-    const normalized = normalizeAppSettings({
-      pipeline: { dayStartTime, stages },
-      pushPresets: pushPresetsPayload,
+    formEl?.addEventListener("click", async (event) => {
+      const saveStageButton = event.target.closest("[data-save-stage-index]");
+      if (!saveStageButton) return;
+
+      const stageIndex = Number.parseInt(saveStageButton.dataset.saveStageIndex, 10);
+      if (Number.isNaN(stageIndex)) return;
+
+      const pipelineFromForm = readPipelineFromForm(formEl);
+      const targetStage = pipelineFromForm.stages[stageIndex];
+      if (!targetStage || Number.isNaN(targetStage.offsetDays) || targetStage.offsetDays < 0) {
+        alert("Offset days must be a non-negative integer.");
+        return;
+      }
+
+      const latestSettings = normalizeAppSettings(await getAppSettings(currentUser.uid));
+      const updatedStages = latestSettings.pipeline.stages.map((stage, idx) => (idx === stageIndex ? targetStage : stage));
+
+      const normalized = normalizeAppSettings({
+        pipeline: { dayStartTime: latestSettings.pipeline.dayStartTime, stages: updatedStages },
+        pushPresets: latestSettings.pushPresets,
+      });
+
+      await setDoc(pipelineSettingsRef(currentUser.uid), normalized);
+      editableSettings = normalized;
+      renderSettingsForm();
     });
-    await setDoc(pipelineSettingsRef(currentUser.uid), normalized);
-    await renderSettingsPage();
-  });
+
+    formEl?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const formData = new FormData(formEl);
+      const pipelineFromForm = readPipelineFromForm(formEl);
+
+      if (pipelineFromForm.stages.some((stage) => Number.isNaN(stage.offsetDays) || stage.offsetDays < 0)) {
+        alert("Offset days must be a non-negative integer.");
+        return;
+      }
+
+      const pushPresetsPayload = editableSettings.pushPresets.map((_, index) => {
+        const label = String(formData.get(`push-label-${index}`) || "").trim() || `Preset ${index + 1}`;
+        const type = String(formData.get(`push-type-${index}`) || "nextTime");
+        const hours = Number.parseInt(String(formData.get(`push-hours-${index}`) || "1"), 10);
+        const time = sanitizeTimeString(String(formData.get(`push-time-${index}`) || "08:30"));
+        const weekday = Number.parseInt(String(formData.get(`push-weekday-${index}`) || "1"), 10);
+
+        if (type === "addHours") {
+          return { label, behavior: { type, hours } };
+        }
+
+        if (type === "nextWeekdayTime") {
+          return { label, behavior: { type, weekday, time } };
+        }
+
+        return { label, behavior: { type: "nextTime", time } };
+      });
+
+      const normalized = normalizeAppSettings({
+        pipeline: pipelineFromForm,
+        pushPresets: pushPresetsPayload,
+      });
+      await setDoc(pipelineSettingsRef(currentUser.uid), normalized);
+      editableSettings = normalized;
+      renderSettingsForm();
+    });
+  }
+
+  renderSettingsForm();
 }
 
 async function renderCurrentRoute() {

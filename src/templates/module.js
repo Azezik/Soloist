@@ -1,3 +1,5 @@
+const DEFAULT_STAGE_TEMPLATE_NAME = "Default";
+
 const DEFAULT_STAGE_TEMPLATE = {
   introText: "Hi [Name],",
   populateName: true,
@@ -8,6 +10,14 @@ const DEFAULT_STAGE_TEMPLATE = {
 const LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER = "Add a template email to this stage in the settings tab";
 const SETTINGS_TEMPLATE_BODY_PLACEHOLDER = "add text";
 
+function buildTemplateId(stageId = "stage", templateIndex = 0) {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `${stageId}-template-${templateIndex + 1}`;
+}
+
 function normalizeStageTemplateConfig(input = {}, fallback = DEFAULT_STAGE_TEMPLATE) {
   return {
     introText: String(input?.introText ?? fallback.introText),
@@ -15,6 +25,35 @@ function normalizeStageTemplateConfig(input = {}, fallback = DEFAULT_STAGE_TEMPL
     bodyText: String(input?.bodyText ?? fallback.bodyText),
     outroText: String(input?.outroText ?? fallback.outroText),
   };
+}
+
+function normalizeStageTemplateEntry(input = {}, { stageId = "stage", templateIndex = 0 } = {}) {
+  const normalizedTemplate = normalizeStageTemplateConfig(input);
+  return {
+    id: String(input?.id || buildTemplateId(stageId, templateIndex)),
+    name: String(input?.name || (templateIndex === 0 ? DEFAULT_STAGE_TEMPLATE_NAME : `Template ${templateIndex + 1}`)),
+    order: Number.isInteger(input?.order) ? input.order : templateIndex,
+    ...normalizedTemplate,
+  };
+}
+
+function normalizeStageTemplates(stage = {}, fallbackStage = {}) {
+  const stageId = String(stage?.id || fallbackStage?.id || "stage");
+
+  if (Array.isArray(stage?.templates) && stage.templates.length > 0) {
+    return stage.templates.map((template, index) => normalizeStageTemplateEntry(template, { stageId, templateIndex: index }));
+  }
+
+  const legacyTemplate = normalizeStageTemplateConfig(stage, normalizeStageTemplateConfig(fallbackStage));
+  return [
+    normalizeStageTemplateEntry(
+      {
+        ...legacyTemplate,
+        name: stage?.name || DEFAULT_STAGE_TEMPLATE_NAME,
+      },
+      { stageId, templateIndex: 0 }
+    ),
+  ];
 }
 
 function getContactFirstName(contactName = "") {
@@ -51,35 +90,56 @@ function renderTemplateWithLead(templateConfig, leadContactName = "") {
   return assembledTemplate ? `${assembledTemplate}\n` : "";
 }
 
-function buildStageTemplateSettingsMarkup(stage, index, escapeHtml) {
-  const config = normalizeStageTemplateConfig(stage);
+function buildStageTemplateSettingsMarkup(stage, stageIndex, escapeHtml) {
+  const templates = normalizeStageTemplates(stage);
 
   return `
     <div class="template-settings-card detail-grid">
-      <p><strong>Template</strong></p>
-      <label>Intro
-        <input name="template-intro-${index}" value="${escapeHtml(config.introText)}" />
-      </label>
-      <label class="template-checkbox-row">
-        <input type="checkbox" name="template-populate-name-${index}" ${config.populateName ? "checked" : ""} />
-        <span>Populate name</span>
-      </label>
-      <label>Body
-        <textarea name="template-body-${index}" rows="4" placeholder="${SETTINGS_TEMPLATE_BODY_PLACEHOLDER}">${escapeHtml(config.bodyText)}</textarea>
-      </label>
-      <label>Outro
-        <input name="template-outro-${index}" value="${escapeHtml(config.outroText)}" />
-      </label>
+      <p><strong>Templates</strong></p>
+      <div class="stage-templates-list" data-stage-templates="${stageIndex}">
+        ${templates
+          .map((template, templateIndex) => {
+            const config = normalizeStageTemplateEntry(template, { stageId: stage.id, templateIndex });
+            return `
+              <div class="template-settings-block" data-template-index="${templateIndex}">
+                <input type="hidden" name="template-id-${stageIndex}-${templateIndex}" value="${escapeHtml(config.id)}" />
+                <label>Template name
+                  <input name="template-name-${stageIndex}-${templateIndex}" value="${escapeHtml(config.name)}" />
+                </label>
+                <label>Intro
+                  <input name="template-intro-${stageIndex}-${templateIndex}" value="${escapeHtml(config.introText)}" />
+                </label>
+                <label class="template-checkbox-row">
+                  <input type="checkbox" name="template-populate-name-${stageIndex}-${templateIndex}" ${config.populateName ? "checked" : ""} />
+                  <span>Populate name</span>
+                </label>
+                <label>Body
+                  <textarea name="template-body-${stageIndex}-${templateIndex}" rows="4" placeholder="${SETTINGS_TEMPLATE_BODY_PLACEHOLDER}">${escapeHtml(config.bodyText)}</textarea>
+                </label>
+                <label>Outro
+                  <input name="template-outro-${stageIndex}-${templateIndex}" value="${escapeHtml(config.outroText)}" />
+                </label>
+              </div>
+            `;
+          })
+          .join("")}
+      </div>
+      <button type="button" class="secondary-btn" data-add-template-stage-index="${stageIndex}">Add alternate template</button>
+      <button type="button" data-save-stage-index="${stageIndex}">Save ${escapeHtml(stage.label)}</button>
     </div>
   `;
 }
 
 export {
   DEFAULT_STAGE_TEMPLATE,
+  DEFAULT_STAGE_TEMPLATE_NAME,
   LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER,
   SETTINGS_TEMPLATE_BODY_PLACEHOLDER,
+  buildTemplateId,
   buildStageTemplateSettingsMarkup,
   getContactFirstName,
   normalizeStageTemplateConfig,
+  normalizeStageTemplateEntry,
+  normalizeStageTemplates,
   renderTemplateWithLead,
 };
