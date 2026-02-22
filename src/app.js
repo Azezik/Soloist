@@ -300,6 +300,13 @@ function getLeadState(lead) {
   return "open";
 }
 
+const LEAD_STATE_FILTERS = [
+  { value: "open", label: "Open" },
+  { value: "closed_won", label: "Closed — Won" },
+  { value: "closed_lost", label: "Closed — Lost" },
+  { value: "drop_out", label: "Drop Out" },
+];
+
 async function completeLeadStage({ userId, leadRef, lead, leadSource, pipelineSettings }) {
   const nowDate = new Date();
   const currentStageId = lead.stageId || pipelineSettings.stages[0]?.id;
@@ -390,7 +397,7 @@ function routeFromHash() {
   if (hash === "contacts") return { page: "contacts" };
   if (hash === "add-contact") return { page: "add-contact" };
   if (hash === "add-lead") return { page: "add-lead" };
-  if (hash === "leads") return { page: "leads" };
+  if (hash === "leads") return { page: "leads", params };
   if (hash === "tasks") return { page: "tasks" };
   if (hash === "calendar") return { page: "calendar", params };
   if (hash === "tasks/new") return { page: "add-task" };
@@ -1234,6 +1241,10 @@ async function renderAddTaskForm() {
 
 async function renderLeadsPage() {
   renderLoading("Loading leads...");
+  const route = routeFromHash();
+  const selectedState = LEAD_STATE_FILTERS.some((filterOption) => filterOption.value === route.params?.get("state"))
+    ? route.params.get("state")
+    : "open";
 
   const [pipelineSettings, contactsSnapshot, leadsSnapshot] = await Promise.all([
     getPipelineSettings(currentUser.uid),
@@ -1248,14 +1259,30 @@ async function renderLeadsPage() {
 
   const leads = leadsSnapshot.docs
     .map((leadDoc) => ({ id: leadDoc.id, ...leadDoc.data() }))
-    .filter((lead) => isActiveRecord(lead) && getLeadState(lead) === "open")
+    .filter((lead) => isActiveRecord(lead) && getLeadState(lead) === selectedState)
     .sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0));
 
   viewContainer.innerHTML = `
     <section class="crm-view crm-view--leads">
       <div class="view-header">
         <h2>Leads</h2>
-        <button id="add-lead-btn" type="button">Add Lead +</button>
+        <div class="view-header-actions">
+          <div class="lead-state-switcher" role="tablist" aria-label="Lead state filter">
+            ${LEAD_STATE_FILTERS.map(
+              (filterOption) => `
+                <button
+                  type="button"
+                  class="secondary-btn ${filterOption.value === selectedState ? "is-active" : ""}"
+                  data-lead-state-filter="${filterOption.value}"
+                  aria-pressed="${filterOption.value === selectedState ? "true" : "false"}"
+                >
+                  ${escapeHtml(filterOption.label)}
+                </button>
+              `
+            ).join("")}
+          </div>
+          <button id="add-lead-btn" type="button">Add Lead +</button>
+        </div>
       </div>
       <div class="feed-list">
         ${
@@ -1282,6 +1309,14 @@ async function renderLeadsPage() {
 
   document.getElementById("add-lead-btn")?.addEventListener("click", () => {
     window.location.hash = "#add-lead";
+  });
+
+  viewContainer.querySelectorAll("[data-lead-state-filter]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", () => {
+      const nextState = buttonEl.dataset.leadStateFilter;
+      if (!nextState || nextState === selectedState) return;
+      window.location.hash = nextState === "open" ? "#leads" : `#leads?state=${encodeURIComponent(nextState)}`;
+    });
   });
 
   viewContainer.querySelectorAll("[data-lead-id]").forEach((leadEl) => {
@@ -1572,7 +1607,11 @@ async function renderLeadDetail(leadId) {
     <section class="crm-view crm-view--leads">
       <div class="view-header">
         <h2>Lead</h2>
-        <button id="edit-lead-btn" type="button">Edit</button>
+        <div class="view-header-actions">
+          <button type="button" id="lead-close-won-btn" class="secondary-btn">Close — Won</button>
+          <button type="button" id="lead-close-lost-btn" class="secondary-btn">Close — Lost</button>
+          <button id="edit-lead-btn" type="button">Edit</button>
+        </div>
       </div>
       <div class="panel panel--lead detail-grid">
         <p><strong>Contact:</strong> ${escapeHtml(linkedContact?.name || "No contact")}</p>
@@ -1605,8 +1644,6 @@ async function renderLeadDetail(leadId) {
                 ${pushOptionsMarkup}
               </div>
             </details>
-            <button type="button" id="lead-close-won-btn" class="secondary-btn">Close – Won</button>
-            <button type="button" id="lead-close-lost-btn" class="secondary-btn">Close – Lost</button>
           </div>
         </form>
       </div>
