@@ -232,6 +232,26 @@ button:active {
   gap: 0.75rem;
 }
 
+.lead-state-switcher {
+  display: inline-flex;
+  border: 1px solid var(--crm-border);
+}
+
+.lead-state-switcher button {
+  border: 0;
+  border-right: 1px solid var(--crm-border);
+  padding: 0.55rem 0.65rem;
+  font-size: 0.85rem;
+}
+
+.lead-state-switcher button:last-child {
+  border-right: 0;
+}
+
+.lead-state-switcher .is-active {
+  background: #2a2a2a;
+}
+
 .view-message {
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.25);
