@@ -1687,7 +1687,8 @@ async function renderLeadDetail(leadId) {
       mailtoParams.set("subject", subject);
     }
     mailtoParams.set("body", body);
-    const mailtoUrl = `mailto:${to}?${mailtoParams.toString()}`;
+    const mailtoQuery = mailtoParams.toString().replace(/\+/g, "%20");
+    const mailtoUrl = `mailto:${to}?${mailtoQuery}`;
     window.location.href = mailtoUrl;
   });
 
