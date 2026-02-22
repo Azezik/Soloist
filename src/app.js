@@ -292,6 +292,63 @@ function buildTimelineEventFields(type, values = {}) {
   };
 }
 
+function getLeadState(lead) {
+  const normalizedState = String(lead?.state || "").trim().toLowerCase();
+  if (["open", "closed_won", "closed_lost", "drop_out"].includes(normalizedState)) {
+    return normalizedState;
+  }
+  return "open";
+}
+
+async function completeLeadStage({ userId, leadRef, lead, leadSource, pipelineSettings }) {
+  const nowDate = new Date();
+  const currentStageId = lead.stageId || pipelineSettings.stages[0]?.id;
+  const nextStage = getNextStage(pipelineSettings, currentStageId);
+
+  if (!nextStage) {
+    const updates = {
+      status: "closed",
+      archived: true,
+      nextActionAt: null,
+      lastActionAt: Timestamp.fromDate(nowDate),
+      updatedAt: serverTimestamp(),
+    };
+    if (leadSource === "leads") {
+      updates.stageStatus = "completed";
+      if (getLeadState(lead) === "open") {
+        updates.state = "drop_out";
+      }
+    }
+    await updateDoc(leadRef, updates);
+    return;
+  }
+
+  const deltaDays = computeOffsetDeltaDays(pipelineSettings, currentStageId, nextStage.id);
+  const nextActionAt = computeNextActionAt(nowDate, deltaDays, pipelineSettings.dayStartTime);
+
+  await updateDoc(leadRef, {
+    stageId: nextStage.id,
+    ...(leadSource === "leads" ? { stageStatus: "pending", status: "open", archived: false } : {}),
+    lastActionAt: Timestamp.fromDate(nowDate),
+    nextActionAt,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+async function pushLeadFromPreset({ userId, entityId, leadSource, preset }) {
+  const pushedAt = computePushedTimestamp(new Date(), preset);
+  if (leadSource === "leads") {
+    await rescheduleLeadAction(userId, entityId, pushedAt.toDate());
+    return;
+  }
+
+  await updateDoc(doc(db, "users", userId, leadSource, entityId), {
+    nextActionAt: pushedAt,
+    lastActionAt: Timestamp.now(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
 async function addTimelineNote({ contactId = null, parentType = "contact", parentId = null, noteText = "" }) {
   const trimmed = String(noteText || "").trim();
   if (!trimmed) return;
@@ -601,47 +658,12 @@ async function renderDashboard() {
       const leadSource = buttonEl.dataset.leadSource;
       if (!leadId || !leadSource) return;
 
-      const nowDate = new Date();
       const leadRef = doc(db, "users", currentUser.uid, leadSource, leadId);
       const leadSnapshot = await getDoc(leadRef);
       if (!leadSnapshot.exists()) return;
       const lead = leadSnapshot.data();
 
-      const nextStage = getNextStage(pipelineSettings, lead.stageId || pipelineSettings.stages[0]?.id);
-      if (!nextStage) {
-        if (leadSource === "leads") {
-          await updateDoc(leadRef, {
-            stageStatus: "completed",
-            status: "closed",
-            archived: true,
-            nextActionAt: null,
-            lastActionAt: Timestamp.fromDate(nowDate),
-            updatedAt: serverTimestamp(),
-          });
-        } else {
-          await updateDoc(leadRef, {
-            status: "closed",
-            archived: true,
-            nextActionAt: null,
-            lastActionAt: Timestamp.fromDate(nowDate),
-            updatedAt: serverTimestamp(),
-          });
-        }
-        await renderDashboard();
-        return;
-      }
-
-      const currentStageId = lead.stageId || pipelineSettings.stages[0]?.id;
-      const deltaDays = computeOffsetDeltaDays(pipelineSettings, currentStageId, nextStage.id);
-      const nextActionAt = computeNextActionAt(nowDate, deltaDays, pipelineSettings.dayStartTime);
-
-      await updateDoc(leadRef, {
-        stageId: nextStage.id,
-        ...(leadSource === "leads" ? { stageStatus: "pending", status: "open", archived: false } : {}),
-        lastActionAt: Timestamp.fromDate(nowDate),
-        nextActionAt,
-        updatedAt: serverTimestamp(),
-      });
+      await completeLeadStage({ userId: currentUser.uid, leadRef, lead, leadSource, pipelineSettings });
       await renderDashboard();
     });
   });
@@ -683,15 +705,7 @@ async function renderDashboard() {
         });
       } else {
         if (!leadSource) return;
-        if (leadSource === "leads") {
-          await rescheduleLeadAction(currentUser.uid, entityId, pushedAt.toDate());
-        } else {
-          await updateDoc(doc(db, "users", currentUser.uid, leadSource, entityId), {
-            nextActionAt: pushedAt,
-            lastActionAt: Timestamp.now(),
-            updatedAt: serverTimestamp(),
-          });
-        }
+        await pushLeadFromPreset({ userId: currentUser.uid, entityId, leadSource, preset });
       }
 
       await renderDashboard();
@@ -1164,6 +1178,7 @@ async function renderAddLeadForm() {
         stageId: values.stageId,
         product: values.product || "",
         stageStatus: values.stageStatus || "pending",
+        state: "open",
         nextActionAt: computedNextActionAt,
         createdAt: now,
         updatedAt: serverTimestamp(),
@@ -1233,7 +1248,7 @@ async function renderLeadsPage() {
 
   const leads = leadsSnapshot.docs
     .map((leadDoc) => ({ id: leadDoc.id, ...leadDoc.data() }))
-    .filter((lead) => isActiveRecord(lead))
+    .filter((lead) => isActiveRecord(lead) && getLeadState(lead) === "open")
     .sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0));
 
   viewContainer.innerHTML = `
@@ -1515,12 +1530,14 @@ async function renderLeadDetail(leadId) {
   const originRoute = getCurrentRouteOrigin(route.params);
 
   const leadRef = doc(db, "users", currentUser.uid, "leads", leadId);
-  const [pipelineSettings, leadSnapshot, contactsSnapshot, leadNotesSnapshot] = await Promise.all([
-    getPipelineSettings(currentUser.uid),
+  const [appSettings, leadSnapshot, contactsSnapshot, leadNotesSnapshot] = await Promise.all([
+    getAppSettings(currentUser.uid),
     getDoc(leadRef),
     getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
     getDocs(query(collection(db, "users", currentUser.uid, "notes"), where("parentType", "==", "lead"), where("parentId", "==", leadId))),
   ]);
+  const pipelineSettings = appSettings.pipeline;
+  const pushPresets = appSettings.pushPresets;
 
   if (!leadSnapshot.exists()) {
     viewContainer.innerHTML = '<p class="view-message">Lead not found.</p>';
@@ -1544,6 +1561,12 @@ async function renderLeadDetail(leadId) {
   const leadNotes = leadNotesSnapshot.docs
     .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
     .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
+  const pushOptionsMarkup = pushPresets
+    .map(
+      (preset, index) =>
+        `<button type="button" data-push-select="true" data-preset-index="${index}" class="push-option">${escapeHtml(preset.label)}</button>`
+    )
+    .join("");
 
   viewContainer.innerHTML = `
     <section class="crm-view crm-view--leads">
@@ -1575,7 +1598,15 @@ async function renderLeadDetail(leadId) {
           <div class="button-row full-width">
             <button type="submit">Save Note</button>
             ${lead.contactId ? `<a href="#contact/${encodeURIComponent(lead.contactId)}" class="timeline-link-pill">View contact activity</a>` : ""}
-            <button type="button" id="lead-close-btn" class="secondary-btn">Done / Close Lead</button>
+            <button type="button" id="lead-done-stage-btn" class="secondary-btn">Done Stage</button>
+            <details class="push-menu">
+              <summary class="secondary-btn">Push</summary>
+              <div class="push-dropdown" data-push-source="leads" data-push-entity="lead" data-push-id="${leadId}">
+                ${pushOptionsMarkup}
+              </div>
+            </details>
+            <button type="button" id="lead-close-won-btn" class="secondary-btn">Close – Won</button>
+            <button type="button" id="lead-close-lost-btn" class="secondary-btn">Close – Lost</button>
           </div>
         </form>
       </div>
@@ -1627,15 +1658,42 @@ async function renderLeadDetail(leadId) {
     await renderLeadDetail(leadId);
   });
 
-  document.getElementById("lead-close-btn")?.addEventListener("click", async () => {
+  document.getElementById("lead-done-stage-btn")?.addEventListener("click", async () => {
+    await completeLeadStage({ userId: currentUser.uid, leadRef, lead, leadSource: "leads", pipelineSettings });
+    await renderLeadDetail(leadId);
+  });
+
+  document.getElementById("lead-close-won-btn")?.addEventListener("click", async () => {
     await updateDoc(leadRef, {
-      stageStatus: "completed",
+      state: "closed_won",
       status: "closed",
       archived: true,
       nextActionAt: null,
       updatedAt: serverTimestamp(),
     });
     await renderLeadDetail(leadId);
+  });
+
+  document.getElementById("lead-close-lost-btn")?.addEventListener("click", async () => {
+    await updateDoc(leadRef, {
+      state: "closed_lost",
+      status: "closed",
+      archived: true,
+      nextActionAt: null,
+      updatedAt: serverTimestamp(),
+    });
+    await renderLeadDetail(leadId);
+  });
+
+  viewContainer.querySelectorAll("[data-push-select]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", async () => {
+      const presetIndex = Number.parseInt(buttonEl.dataset.presetIndex, 10);
+      const preset = pushPresets[presetIndex];
+      if (!preset) return;
+
+      await pushLeadFromPreset({ userId: currentUser.uid, entityId: leadId, leadSource: "leads", preset });
+      await renderLeadDetail(leadId);
+    });
   });
 
   let currentTemplate = selectedTemplate;
