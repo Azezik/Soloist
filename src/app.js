@@ -1600,7 +1600,6 @@ async function renderLeadDetail(leadId) {
             type="button"
             id="lead-open-mail-btn"
             ${leadEmail ? `data-mail-to="${escapeHtml(leadEmail)}"` : "disabled"}
-            data-mail-subject="${escapeHtml(`smolCRM - ${stageLabel}`)}"
           >
             Open in mail
           </button>
@@ -1662,6 +1661,7 @@ async function renderLeadDetail(leadId) {
 
     if (leadOpenMailBtn) {
       leadOpenMailBtn.dataset.mailBody = templateOutputText;
+      leadOpenMailBtn.dataset.mailSubject = String(currentTemplate?.subjectText || "");
     }
   }
 
@@ -1682,7 +1682,12 @@ async function renderLeadDetail(leadId) {
     }
     const subject = String(mailButton?.dataset.mailSubject || "");
     const body = String(mailButton?.dataset.mailBody || "");
-    const mailtoUrl = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    const mailtoParams = new URLSearchParams();
+    if (subject.trim()) {
+      mailtoParams.set("subject", subject);
+    }
+    mailtoParams.set("body", body);
+    const mailtoUrl = `mailto:${to}?${mailtoParams.toString()}`;
     window.location.href = mailtoUrl;
   });
 
@@ -1935,6 +1940,7 @@ async function renderSettingsPage() {
       return {
         id: String(formEl.elements[`template-id-${stageIndex}-${templateIndex}`]?.value || templateDefaults.id || buildTemplateId(stage.id, templateIndex)),
         name: String(formEl.elements[`template-name-${stageIndex}-${templateIndex}`]?.value || templateDefaults.name || `Template ${templateIndex + 1}`).trim() || `Template ${templateIndex + 1}`,
+        subjectText: String(formEl.elements[`template-subject-${stageIndex}-${templateIndex}`]?.value ?? templateDefaults.subjectText),
         introText: String(formEl.elements[`template-intro-${stageIndex}-${templateIndex}`]?.value ?? templateDefaults.introText),
         populateName: formEl.elements[`template-populate-name-${stageIndex}-${templateIndex}`]?.checked === true,
         bodyText: String(formEl.elements[`template-body-${stageIndex}-${templateIndex}`]?.value ?? templateDefaults.bodyText),

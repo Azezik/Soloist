@@ -1,6 +1,7 @@
 const DEFAULT_STAGE_TEMPLATE_NAME = "Default";
 
 const DEFAULT_STAGE_TEMPLATE = {
+  subjectText: "",
   introText: "Hi [Name],",
   populateName: true,
   bodyText: "",
@@ -20,6 +21,7 @@ function buildTemplateId(stageId = "stage", templateIndex = 0) {
 
 function normalizeStageTemplateConfig(input = {}, fallback = DEFAULT_STAGE_TEMPLATE) {
   return {
+    subjectText: String(input?.subjectText ?? fallback.subjectText),
     introText: String(input?.introText ?? fallback.introText),
     populateName: input?.populateName !== undefined ? input.populateName === true : fallback.populateName,
     bodyText: String(input?.bodyText ?? fallback.bodyText),
@@ -105,6 +107,9 @@ function buildStageTemplateSettingsMarkup(stage, stageIndex, escapeHtml) {
                 <input type="hidden" name="template-id-${stageIndex}-${templateIndex}" value="${escapeHtml(config.id)}" />
                 <label>Template name
                   <input name="template-name-${stageIndex}-${templateIndex}" value="${escapeHtml(config.name)}" />
+                </label>
+                <label>Subject
+                  <input name="template-subject-${stageIndex}-${templateIndex}" value="${escapeHtml(config.subjectText)}" placeholder="add subject" />
                 </label>
                 <label>Intro
                   <input name="template-intro-${stageIndex}-${templateIndex}" value="${escapeHtml(config.introText)}" />
