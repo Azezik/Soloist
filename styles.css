@@ -922,3 +922,23 @@ select {
   outline: 1px dashed rgba(255, 255, 255, 0.85);
   outline-offset: -2px;
 }
+
+.template-settings-card {
+  border-top: 1px solid var(--crm-divider);
+  padding-top: 0.75rem;
+  margin-top: 0.4rem;
+}
+
+.template-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.template-checkbox-row input[type="checkbox"] {
+  width: auto;
+}
+
+.lead-template-output--placeholder::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
