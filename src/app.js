@@ -1682,11 +1682,12 @@ async function renderLeadDetail(leadId) {
     }
     const subject = String(mailButton?.dataset.mailSubject || "");
     const body = String(mailButton?.dataset.mailBody || "");
+    const bodyWithSingleTrailingBlankLine = body.replace(/\n*$/, "\n\n");
     const mailtoParams = new URLSearchParams();
     if (subject.trim()) {
       mailtoParams.set("subject", subject);
     }
-    mailtoParams.set("body", body);
+    mailtoParams.set("body", bodyWithSingleTrailingBlankLine);
     const mailtoQuery = mailtoParams.toString().replace(/\+/g, "%20");
     const mailtoUrl = `mailto:${to}?${mailtoQuery}`;
     window.location.href = mailtoUrl;
