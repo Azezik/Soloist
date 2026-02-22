@@ -1,13 +1,14 @@
 import { Timestamp } from "../data/firestore-service.js";
+import { DEFAULT_STAGE_TEMPLATE, normalizeStageTemplateConfig } from "../templates/module.js";
 
 const DEFAULT_PIPELINE_SETTINGS = {
   dayStartTime: "08:30",
   stages: [
-    { id: "stage1", label: "Stage 1", offsetDays: 0 },
-    { id: "stage2", label: "Stage 2", offsetDays: 2 },
-    { id: "stage3", label: "Stage 3", offsetDays: 7 },
-    { id: "stage4", label: "Stage 4", offsetDays: 15 },
-    { id: "stage5", label: "Stage 5", offsetDays: 30 },
+    { id: "stage1", label: "Stage 1", offsetDays: 0, ...DEFAULT_STAGE_TEMPLATE },
+    { id: "stage2", label: "Stage 2", offsetDays: 2, ...DEFAULT_STAGE_TEMPLATE },
+    { id: "stage3", label: "Stage 3", offsetDays: 7, ...DEFAULT_STAGE_TEMPLATE },
+    { id: "stage4", label: "Stage 4", offsetDays: 15, ...DEFAULT_STAGE_TEMPLATE },
+    { id: "stage5", label: "Stage 5", offsetDays: 30, ...DEFAULT_STAGE_TEMPLATE },
   ],
 };
 
@@ -69,14 +70,18 @@ function normalizePipelineSettings(input) {
         id: `stage${index + 1}`,
         label: `Stage ${index + 1}`,
         offsetDays: index,
+        ...DEFAULT_STAGE_TEMPLATE,
       };
 
       const parsedOffset = Number.parseInt(stage?.offsetDays, 10);
+
+      const templateConfig = normalizeStageTemplateConfig(stage, fallbackStage);
 
       return {
         id: String(stage?.id || fallbackStage.id),
         label: String(stage?.label || fallbackStage.label),
         offsetDays: Number.isNaN(parsedOffset) ? fallbackStage.offsetDays : parsedOffset,
+        ...templateConfig,
       };
     }),
   };

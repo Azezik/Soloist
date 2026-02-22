@@ -28,6 +28,7 @@ import {
 import { getAppSettings, getPipelineSettings, pipelineSettingsRef } from "./data/settings-service.js";
 import { renderCalendarScreen } from "./calendar/calendar-screen.js";
 import { rescheduleLeadAction } from "./data/calendar-service.js";
+import { LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER, buildStageTemplateSettingsMarkup, normalizeStageTemplateConfig, renderTemplateWithLead } from "./templates/module.js";
 
 const statusEl = document.getElementById("auth-status");
 const emailEl = document.getElementById("email");
@@ -1527,6 +1528,10 @@ async function renderLeadDetail(leadId) {
     .map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }))
     .filter((contact) => isActiveRecord(contact));
   const linkedContact = contacts.find((contact) => contact.id === lead.contactId) || null;
+  const currentStage = getStageById(pipelineSettings, lead.stageId) || pipelineSettings.stages[0] || null;
+  const stageTemplate = normalizeStageTemplateConfig(currentStage || {});
+  const hasTemplateBody = stageTemplate.bodyText.trim().length > 0;
+  const assembledTemplateText = renderTemplateWithLead(stageTemplate, linkedContact?.name || "");
   const leadNotes = leadNotesSnapshot.docs
     .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
     .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
@@ -1564,6 +1569,16 @@ async function renderLeadDetail(leadId) {
             <button type="button" id="lead-close-btn" class="secondary-btn">Done / Close Lead</button>
           </div>
         </form>
+      </div>
+
+      <div class="panel panel--lead notes-panel">
+        <h3>Template: ${escapeHtml(currentStage?.label || "Unknown stage")}</h3>
+        <label class="full-width">Generated template
+          <textarea rows="8" readonly class="lead-template-output ${hasTemplateBody ? "" : "lead-template-output--placeholder"}" placeholder="${escapeHtml(LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER)}">${escapeHtml(hasTemplateBody ? assembledTemplateText : "")}</textarea>
+        </label>
+        <div class="button-row full-width">
+          <button type="button" ${hasTemplateBody ? `data-copy-text="${escapeHtml(assembledTemplateText)}"` : "disabled"}>Copy template</button>
+        </div>
       </div>
     </section>
   `;
@@ -1855,6 +1870,7 @@ async function renderSettingsPage() {
                 <label>Offset Days
                   <input type="number" step="1" name="offset-${index}" value="${stage.offsetDays}" required />
                 </label>
+                ${buildStageTemplateSettingsMarkup(stage, index, escapeHtml)}
               </div>
             `
           )
@@ -1916,10 +1932,17 @@ async function renderSettingsPage() {
 
     const formData = new FormData(event.currentTarget);
     const dayStartTime = sanitizeTimeString(String(formData.get("dayStartTime") || "08:30"));
-    const stages = pipelineSettings.stages.map((stage, index) => ({
-      ...stage,
-      offsetDays: Number.parseInt(String(formData.get(`offset-${index}`) || stage.offsetDays), 10),
-    }));
+    const stages = pipelineSettings.stages.map((stage, index) => {
+      const templateDefaults = normalizeStageTemplateConfig(stage);
+      return {
+        ...stage,
+        offsetDays: Number.parseInt(String(formData.get(`offset-${index}`) || stage.offsetDays), 10),
+        introText: String(formData.get(`template-intro-${index}`) ?? templateDefaults.introText),
+        populateName: formData.get(`template-populate-name-${index}`) === "on",
+        bodyText: String(formData.get(`template-body-${index}`) ?? templateDefaults.bodyText),
+        outroText: String(formData.get(`template-outro-${index}`) ?? templateDefaults.outroText),
+      };
+    });
 
     if (stages.some((stage) => Number.isNaN(stage.offsetDays) || stage.offsetDays < 0)) {
       alert("Offset days must be a non-negative integer.");
