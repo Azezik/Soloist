@@ -1532,6 +1532,9 @@ async function renderLeadDetail(leadId) {
   const stageTemplate = normalizeStageTemplateConfig(currentStage || {});
   const hasTemplateBody = stageTemplate.bodyText.trim().length > 0;
   const assembledTemplateText = renderTemplateWithLead(stageTemplate, linkedContact?.name || "");
+  const templateOutputText = hasTemplateBody ? assembledTemplateText : "";
+  const leadEmail = String(linkedContact?.email || "").trim();
+  const stageLabel = currentStage?.label || "Unknown stage";
   const leadNotes = leadNotesSnapshot.docs
     .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
     .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
@@ -1572,11 +1575,20 @@ async function renderLeadDetail(leadId) {
       </div>
 
       <div class="panel panel--lead notes-panel">
-        <h3>Template: ${escapeHtml(currentStage?.label || "Unknown stage")}</h3>
+        <h3>Template: ${escapeHtml(stageLabel)}</h3>
         <label class="full-width">Generated template
-          <textarea rows="8" readonly class="lead-template-output ${hasTemplateBody ? "" : "lead-template-output--placeholder"}" placeholder="${escapeHtml(LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER)}">${escapeHtml(hasTemplateBody ? assembledTemplateText : "")}</textarea>
+          <textarea rows="8" readonly class="lead-template-output ${hasTemplateBody ? "" : "lead-template-output--placeholder"}" placeholder="${escapeHtml(LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER)}">${escapeHtml(templateOutputText)}</textarea>
         </label>
         <div class="button-row full-width">
+          <button
+            type="button"
+            id="lead-open-mail-btn"
+            ${leadEmail ? `data-mail-to="${escapeHtml(leadEmail)}"` : "disabled"}
+            data-mail-subject="${escapeHtml(`smolCRM - ${stageLabel}`)}"
+            data-mail-body="${escapeHtml(templateOutputText)}"
+          >
+            Open in mail
+          </button>
           <button type="button" ${hasTemplateBody ? `data-copy-text="${escapeHtml(assembledTemplateText)}"` : "disabled"}>Copy template</button>
         </div>
       </div>
@@ -1610,6 +1622,21 @@ async function renderLeadDetail(leadId) {
       updatedAt: serverTimestamp(),
     });
     await renderLeadDetail(leadId);
+  });
+
+  document.getElementById("lead-open-mail-btn")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const mailButton = event.currentTarget;
+    const to = String(mailButton?.dataset.mailTo || "").trim();
+    if (!to) {
+      alert("No email on this lead.");
+      return;
+    }
+    const subject = String(mailButton?.dataset.mailSubject || "");
+    const body = String(mailButton?.dataset.mailBody || "");
+    const mailtoUrl = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = mailtoUrl;
   });
 
   attachClipboardHandlers();
