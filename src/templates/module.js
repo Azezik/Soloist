@@ -92,6 +92,39 @@ function renderTemplateWithLead(templateConfig, leadContactName = "") {
   return assembledTemplate ? `${assembledTemplate}\n` : "";
 }
 
+function normalizePromotionTemplateConfig(input = {}) {
+  const normalizedStageTemplate = normalizeStageTemplateConfig({
+    subjectText: input?.subjectText ?? input?.subject,
+    introText: input?.introText ?? input?.opening,
+    populateName: input?.populateName,
+    bodyText: input?.bodyText ?? input?.body,
+    outroText: input?.outroText ?? input?.closing,
+  });
+
+  return {
+    ...normalizedStageTemplate,
+    subject: normalizedStageTemplate.subjectText,
+    opening: normalizedStageTemplate.introText,
+    body: normalizedStageTemplate.bodyText,
+    closing: normalizedStageTemplate.outroText,
+  };
+}
+
+function toPromotionTemplatePayload(templateConfig = {}) {
+  const normalized = normalizePromotionTemplateConfig(templateConfig);
+  return {
+    subject: normalized.subjectText,
+    opening: normalized.introText,
+    body: normalized.bodyText,
+    closing: normalized.outroText,
+    subjectText: normalized.subjectText,
+    introText: normalized.introText,
+    populateName: normalized.populateName,
+    bodyText: normalized.bodyText,
+    outroText: normalized.outroText,
+  };
+}
+
 function buildStageTemplateSettingsMarkup(stage, stageIndex, escapeHtml) {
   const templates = normalizeStageTemplates(stage);
 
@@ -146,5 +179,7 @@ export {
   normalizeStageTemplateConfig,
   normalizeStageTemplateEntry,
   normalizeStageTemplates,
+  normalizePromotionTemplateConfig,
   renderTemplateWithLead,
+  toPromotionTemplatePayload,
 };
