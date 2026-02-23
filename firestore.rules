@@ -15,18 +15,26 @@ service cloud.firestore {
       return !('sys' in request.resource.data);
     }
 
-    function ownerCrud(userId) {
+    function ownerRead(userId) {
+      return isOwner(userId);
+    }
+
+    function ownerCreateUpdate(userId) {
       return isOwner(userId) && hasNoReservedSystemEnvelope();
+    }
+
+    function ownerDelete(userId) {
+      return isOwner(userId);
     }
 
     match /users/{userId} {
       // Keep root user document immutable from clients.
-      allow read: if isOwner(userId);
+      allow read: if ownerRead(userId);
       allow write: if false;
 
       // Canonical entitlement document (single source of truth, server-managed).
       match /entitlements/main {
-        allow read: if isOwner(userId);
+        allow read: if ownerRead(userId);
         allow write: if false;
       }
 
@@ -46,40 +54,58 @@ service cloud.firestore {
 
       // Tier 1 CRM namespace (current UX): full CRUD inside owner's account scope.
       match /contacts/{contactId} {
-        allow read, create, update, delete: if ownerCrud(userId);
+        allow read: if ownerRead(userId);
+        allow create, update: if ownerCreateUpdate(userId);
+        allow delete: if ownerDelete(userId);
       }
 
       match /leads/{leadId} {
-        allow read, create, update, delete: if ownerCrud(userId);
+        allow read: if ownerRead(userId);
+        allow create, update: if ownerCreateUpdate(userId);
+        allow delete: if ownerDelete(userId);
       }
 
       match /tasks/{taskId} {
-        allow read, create, update, delete: if ownerCrud(userId);
+        allow read: if ownerRead(userId);
+        allow create, update: if ownerCreateUpdate(userId);
+        allow delete: if ownerDelete(userId);
       }
 
       match /notes/{noteId} {
-        allow read, create, update, delete: if ownerCrud(userId);
+        allow read: if ownerRead(userId);
+        allow create, update: if ownerCreateUpdate(userId);
+        allow delete: if ownerDelete(userId);
       }
 
       match /promotionEvents/{promotionEventId} {
-        allow read, create, update, delete: if ownerCrud(userId);
+        allow read: if ownerRead(userId);
+        allow create, update: if ownerCreateUpdate(userId);
+        allow delete: if ownerDelete(userId);
       }
 
       match /events/{eventId} {
-        allow read, create, update, delete: if ownerCrud(userId);
+        allow read: if ownerRead(userId);
+        allow create, update: if ownerCreateUpdate(userId);
+        allow delete: if ownerDelete(userId);
       }
 
       match /promotions/{promotionId} {
-        allow read, create, update, delete: if ownerCrud(userId);
+        allow read: if ownerRead(userId);
+        allow create, update: if ownerCreateUpdate(userId);
+        allow delete: if ownerDelete(userId);
 
         match /snapshots/{snapshotId} {
-          allow read, create, update, delete: if ownerCrud(userId);
+          allow read: if ownerRead(userId);
+          allow create, update: if ownerCreateUpdate(userId);
+          allow delete: if ownerDelete(userId);
         }
       }
 
       // Settings are intentionally multi-document, but scoped to known keys to prevent sprawl.
       match /settings/{settingId} {
-        allow read, create, update: if ownerCrud(userId)
+        allow read: if ownerRead(userId)
+          && settingId in ['pipeline', 'nightlyRollover', 'main'];
+        allow create, update: if ownerCreateUpdate(userId)
           && settingId in ['pipeline', 'nightlyRollover', 'main'];
         allow delete: if false;
       }
