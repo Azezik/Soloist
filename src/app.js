@@ -208,7 +208,7 @@ function explainFirestoreError(error) {
   if (errorCode === "permission-denied") {
     return [
       "This account is signed in, but Firestore access was denied.",
-      "Update Firebase Firestore Security Rules to allow authenticated users to read and write users/{userId}/contacts, users/{userId}/leads, users/{userId}/tasks, users/{userId}/notes, and users/{userId}/settings/pipeline.",
+      "Update Firebase Firestore Security Rules to allow authenticated users to read and write users/{userId}/contacts, users/{userId}/leads, users/{userId}/tasks, users/{userId}/notes, users/{userId}/promotions, users/{userId}/promotionEvents, users/{userId}/promotions/{promotionId}/snapshots, and users/{userId}/settings/pipeline.",
     ].join(" ");
   }
 
@@ -1991,9 +1991,7 @@ async function renderPromotionEventDetail(eventId) {
   ]);
   const contact = contactSnapshot?.exists?.() ? { id: contactSnapshot.id, ...contactSnapshot.data() } : null;
   const lead = leadSnapshot?.exists?.() ? { id: leadSnapshot.id, ...leadSnapshot.data() } : null;
-  const mailBody = [event.template?.opening || "", event.template?.body || "", event.template?.closing || ""].filter(Boolean).join("
-
-").trim();
+  const mailBody = [event.template?.opening || "", event.template?.body || "", event.template?.closing || ""].filter(Boolean).join("\n\n").trim();
   const mailTo = String(contact?.email || "").trim();
 
   viewContainer.innerHTML = `
