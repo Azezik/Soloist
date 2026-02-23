@@ -47,7 +47,7 @@ function computeTargetLeads({ leads, promotion, snapWindowDays = 2, searchText =
       (targeting.includes("snap_active") && snapActive);
 
     if (!includeByToggle) return false;
-    if (!targeting.includes("custom_search") || !text) return true;
+    if (!text) return true;
 
     const haystack = `${lead.name || ""} ${lead.product || ""}`.toLowerCase();
     return haystack.includes(text);
