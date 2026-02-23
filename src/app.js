@@ -1991,9 +1991,7 @@ async function renderPromotionEventDetail(eventId) {
   ]);
   const contact = contactSnapshot?.exists?.() ? { id: contactSnapshot.id, ...contactSnapshot.data() } : null;
   const lead = leadSnapshot?.exists?.() ? { id: leadSnapshot.id, ...leadSnapshot.data() } : null;
-  const mailBody = [event.template?.opening || "", event.template?.body || "", event.template?.closing || ""].filter(Boolean).join("
-
-").trim();
+  const mailBody = [event.template?.opening || "", event.template?.body || "", event.template?.closing || ""].filter(Boolean).join("\n\n").trim();
   const mailTo = String(contact?.email || "").trim();
 
   viewContainer.innerHTML = `
