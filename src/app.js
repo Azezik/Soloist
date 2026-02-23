@@ -37,9 +37,11 @@ import {
   LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER,
   buildStageTemplateSettingsMarkup,
   buildTemplateId,
+  normalizePromotionTemplateConfig,
   normalizeStageTemplateEntry,
   normalizeStageTemplates,
   renderTemplateWithLead,
+  toPromotionTemplatePayload,
 } from "./templates/module.js";
 
 const statusEl = document.getElementById("auth-status");
@@ -535,7 +537,7 @@ async function renderDashboard() {
     const event = { id: eventDoc.id, ...eventDoc.data() };
     if (!isActiveRecord(event)) return null;
     const contact = event.contactId ? contactById[event.contactId] : null;
-    return { type: "promotion", id: event.id, leadId: event.leadId, title: contact?.name || "Unnamed Contact", subtitle: event.name || "Promotion touchpoint", dueAt: event.scheduledFor };
+    return { type: "promotion", id: event.id, leadId: event.leadId, title: contact?.name || "Unnamed Contact", subtitle: event.touchpointName || event.name || "Promotion touchpoint", dueAt: event.scheduledFor };
   }).filter(Boolean);
 
   const pushOptionsMarkup = pushPresets.map((preset, index) => `<button type="button" data-push-select="true" data-preset-index="${index}" class="push-option">${escapeHtml(preset.label)}</button>`).join("");
@@ -1991,7 +1993,8 @@ async function renderPromotionEventDetail(eventId) {
   ]);
   const contact = contactSnapshot?.exists?.() ? { id: contactSnapshot.id, ...contactSnapshot.data() } : null;
   const lead = leadSnapshot?.exists?.() ? { id: leadSnapshot.id, ...leadSnapshot.data() } : null;
-  const mailBody = [event.template?.opening || "", event.template?.body || "", event.template?.closing || ""].filter(Boolean).join("\n\n").trim();
+  const templateConfig = normalizePromotionTemplateConfig(event.templateConfig || event.template || {});
+  const mailBody = renderTemplateWithLead(templateConfig, contact?.name || "").trim();
   const mailTo = String(contact?.email || "").trim();
 
   viewContainer.innerHTML = `
@@ -2004,25 +2007,25 @@ async function renderPromotionEventDetail(eventId) {
       </div>
       <div class="panel panel--lead detail-grid feed-item--promotion">
         <p><strong>Lead:</strong> ${escapeHtml(contact?.name || "Unnamed Contact")}</p>
-        <p><strong>Promotion:</strong> ${escapeHtml(event.name || "Promotion touchpoint")}</p>
+        <p><strong>Promotion:</strong> ${escapeHtml(event.touchpointName || event.name || "Promotion touchpoint")}</p>
         <p><strong>Due:</strong> ${formatDate(event.scheduledFor)}</p>
       </div>
       <div class="panel panel--lead notes-panel">
         <h3>Template</h3>
         <label class="full-width">Subject
-          <input value="${escapeHtml(event.template?.subject || "")}" readonly />
+          <input value="${escapeHtml(templateConfig.subjectText || "")}" readonly />
         </label>
-        <label class="full-width">Opening
-          <textarea rows="2" readonly>${escapeHtml(event.template?.opening || "")}</textarea>
+        <label class="full-width">Intro
+          <textarea rows="2" readonly>${escapeHtml(templateConfig.introText || "")}</textarea>
         </label>
         <label class="full-width">Body
-          <textarea rows="6" readonly>${escapeHtml(event.template?.body || "")}</textarea>
+          <textarea rows="6" readonly>${escapeHtml(templateConfig.bodyText || "")}</textarea>
         </label>
-        <label class="full-width">Closing
-          <textarea rows="2" readonly>${escapeHtml(event.template?.closing || "")}</textarea>
+        <label class="full-width">Outro
+          <textarea rows="2" readonly>${escapeHtml(templateConfig.outroText || "")}</textarea>
         </label>
         <div class="button-row full-width">
-          <button id="promotion-open-mail-btn" type="button" ${mailTo ? `data-mail-to="${escapeHtml(mailTo)}"` : "disabled"} data-mail-subject="${escapeHtml(event.template?.subject || "")}" data-mail-body="${escapeHtml(mailBody)}">Open in mail</button>
+          <button id="promotion-open-mail-btn" type="button" ${mailTo ? `data-mail-to="${escapeHtml(mailTo)}"` : "disabled"} data-mail-subject="${escapeHtml(templateConfig.subjectText || "")}" data-mail-body="${escapeHtml(mailBody)}">Open in mail</button>
           <button id="promotion-done-btn" type="button" class="secondary-btn">Done</button>
           ${lead ? `<a href="#lead/${encodeURIComponent(lead.id)}" class="timeline-link-pill">Open lead</a>` : ""}
         </div>
@@ -2113,6 +2116,45 @@ function toDateTimeLocalInputValue(value) {
   return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
+function buildPromotionTouchpointState(inputTouchpoint = {}, index = 0) {
+  const order = Number.isInteger(inputTouchpoint?.order) ? inputTouchpoint.order : index;
+  const templateConfig = normalizePromotionTemplateConfig(inputTouchpoint.templateConfig || inputTouchpoint.template || {});
+  return {
+    id: String(inputTouchpoint.id || `tp-${index + 1}`),
+    name: String(inputTouchpoint.name || `Touchpoint ${order + 1}`),
+    order,
+    offsetDays: Number.parseInt(inputTouchpoint.offsetDays, 10) || 0,
+    templateConfig,
+    template: toPromotionTemplatePayload(templateConfig),
+  };
+}
+
+function buildPromotionTouchpointMarkup(touchpoint, index) {
+  const template = normalizePromotionTemplateConfig(touchpoint.templateConfig || touchpoint.template || {});
+  return `<div class="panel detail-grid"><label>Touchpoint name<input data-touchpoint-name="${index}" value="${escapeHtml(touchpoint.name || `Touchpoint ${index + 1}`)}" /></label><label>Notify Leads <input type="number" min="0" data-touchpoint-offset="${index}" value="${touchpoint.offsetDays}" /> days before end of promo</label><label>Subject<input data-touchpoint-subject="${index}" value="${escapeHtml(template.subjectText)}" /></label><label>Intro<input data-touchpoint-intro="${index}" value="${escapeHtml(template.introText)}" /></label><label class="template-checkbox-row"><input type="checkbox" data-touchpoint-populate-name="${index}" ${template.populateName ? "checked" : ""} /><span>Populate name</span></label><label>Body<textarea rows="4" data-touchpoint-body="${index}">${escapeHtml(template.bodyText)}</textarea></label><label>Outro<input data-touchpoint-outro="${index}" value="${escapeHtml(template.outroText)}" /></label></div>`;
+}
+
+function syncPromotionTouchpointsFromForm(touchpoints = []) {
+  return touchpoints.map((touchpoint, index) => {
+    const templateConfig = normalizePromotionTemplateConfig({
+      subjectText: document.querySelector(`[data-touchpoint-subject="${index}"]`)?.value || "",
+      introText: document.querySelector(`[data-touchpoint-intro="${index}"]`)?.value || "",
+      populateName: document.querySelector(`[data-touchpoint-populate-name="${index}"]`)?.checked === true,
+      bodyText: document.querySelector(`[data-touchpoint-body="${index}"]`)?.value || "",
+      outroText: document.querySelector(`[data-touchpoint-outro="${index}"]`)?.value || "",
+    });
+
+    return {
+      ...touchpoint,
+      name: String(document.querySelector(`[data-touchpoint-name="${index}"]`)?.value || touchpoint.name || `Touchpoint ${index + 1}`),
+      order: index,
+      offsetDays: Number.parseInt(document.querySelector(`[data-touchpoint-offset="${index}"]`)?.value || touchpoint.offsetDays, 10) || 0,
+      templateConfig,
+      template: toPromotionTemplatePayload(templateConfig),
+    };
+  });
+}
+
 function renderPromotionCreateFlow({ snapWindowDays, leads, promotions = [] }) {
   const state = {
     page: 1,
@@ -2159,7 +2201,7 @@ function renderPromotionCreateFlow({ snapWindowDays, leads, promotions = [] }) {
           syncPage1StateFromInputs();
           state.presetKey = buttonEl.dataset.presetKey || "custom";
           const preset = PROMOTION_PRESETS[state.presetKey] || PROMOTION_PRESETS.custom;
-          state.touchpoints = preset.touchpoints.map((offset, index) => ({ id: `tp-${index + 1}`, order: index, offsetDays: offset, template: { subject: "", opening: "", body: "", closing: "" } }));
+          state.touchpoints = preset.touchpoints.map((offset, index) => buildPromotionTouchpointState({ offsetDays: offset, order: index }, index));
           state.targeting = [...preset.targeting];
           draw();
         });
@@ -2175,17 +2217,7 @@ function renderPromotionCreateFlow({ snapWindowDays, leads, promotions = [] }) {
           state.name = snapshot.name || selectedPreset.name;
           state.endDate = toDateTimeLocalInputValue(snapshot.endDate);
           state.presetKey = snapshot.presetKey || "custom";
-          state.touchpoints = (snapshot.touchpoints || []).map((touchpoint, index) => ({
-            id: touchpoint.id || `tp-${index + 1}`,
-            order: Number.isFinite(touchpoint.order) ? touchpoint.order : index,
-            offsetDays: Number.parseInt(touchpoint.offsetDays, 10) || 0,
-            template: {
-              subject: touchpoint.template?.subject || "",
-              opening: touchpoint.template?.opening || "",
-              body: touchpoint.template?.body || "",
-              closing: touchpoint.template?.closing || "",
-            },
-          }));
+          state.touchpoints = (snapshot.touchpoints || []).map((touchpoint, index) => buildPromotionTouchpointState(touchpoint, index));
           state.targeting = [...(snapshot.targeting || [])];
           state.searchText = "";
           state.selectedLeadIds = new Set();
@@ -2207,10 +2239,10 @@ function renderPromotionCreateFlow({ snapWindowDays, leads, promotions = [] }) {
     const targetLeads = computeTargetLeads({ leads, promotion: promotionConfig, snapWindowDays, searchText: state.searchText });
     if (!state.selectedLeadIds.size) targetLeads.forEach((lead) => state.selectedLeadIds.add(lead.id));
 
-    viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>Promotion Setup</h2></div><div class="panel form-grid"><h3>Basic Info</h3><label>Promo Name<input id="promo-name-edit" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-edit" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><h3>Touchpoints</h3><div id="touchpoint-list">${state.touchpoints.map((tp, index) => `<div class="panel detail-grid"><label>Notify Leads <input type="number" min="0" data-touchpoint-offset="${index}" value="${tp.offsetDays}" /> days before end of promo</label><label>Subject<input data-touchpoint-subject="${index}" value="${escapeHtml(tp.template.subject)}" /></label><label>Opening<textarea rows="2" data-touchpoint-opening="${index}">${escapeHtml(tp.template.opening)}</textarea></label><label>Body<textarea rows="4" data-touchpoint-body="${index}">${escapeHtml(tp.template.body)}</textarea></label><label>Closing<textarea rows="2" data-touchpoint-closing="${index}">${escapeHtml(tp.template.closing)}</textarea></label></div>`).join("")}</div><button id="add-touchpoint-btn" class="secondary-btn" type="button">Add Touchpoint</button><h3>Targeting Strategy</h3><div class="promo-targeting">${TARGETING_OPTIONS.map((option) => `<button type="button" class="secondary-btn ${state.targeting.includes(option.id) ? "is-active" : ""}" data-targeting-id="${option.id}">${option.label}</button>`).join("")}</div><label>Custom Search<input id="promo-search" value="${escapeHtml(state.searchText)}" placeholder="Name or product" /></label><label><input type="checkbox" id="promo-select-all" checked /> Select All</label><div class="lead-list">${targetLeads.map((lead) => `<article class="panel panel--lead"><label><input type="checkbox" data-target-lead-id="${lead.id}" ${state.selectedLeadIds.has(lead.id) ? "checked" : ""} /> ${escapeHtml(lead.name || "Unnamed")}</label><p>${escapeHtml(lead.product || "No product")}</p><small>${qualifiesForSnap(lead, state.touchpoints, new Date(state.endDate), snapWindowDays) ? "Snap Active" : isLeadDropOutState(lead) ? "Drop-Out" : "Active"}</small></article>`).join("")}</div><button id="create-promo-btn" type="button">Create Promo</button></div></section>`;
+    viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>Promotion Setup</h2></div><div class="panel form-grid"><h3>Basic Info</h3><label>Promo Name<input id="promo-name-edit" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-edit" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><h3>Touchpoints</h3><div id="touchpoint-list">${state.touchpoints.map((tp, index) => buildPromotionTouchpointMarkup(tp, index)).join("")}</div><button id="add-touchpoint-btn" class="secondary-btn" type="button">Add Touchpoint</button><h3>Targeting Strategy</h3><div class="promo-targeting">${TARGETING_OPTIONS.map((option) => `<button type="button" class="secondary-btn ${state.targeting.includes(option.id) ? "is-active" : ""}" data-targeting-id="${option.id}">${option.label}</button>`).join("")}</div><label>Custom Search<input id="promo-search" value="${escapeHtml(state.searchText)}" placeholder="Name or product" /></label><label><input type="checkbox" id="promo-select-all" checked /> Select All</label><div class="lead-list">${targetLeads.map((lead) => `<article class="panel panel--lead"><label><input type="checkbox" data-target-lead-id="${lead.id}" ${state.selectedLeadIds.has(lead.id) ? "checked" : ""} /> ${escapeHtml(lead.name || "Unnamed")}</label><p>${escapeHtml(lead.product || "No product")}</p><small>${qualifiesForSnap(lead, state.touchpoints, new Date(state.endDate), snapWindowDays) ? "Snap Active" : isLeadDropOutState(lead) ? "Drop-Out" : "Active"}</small></article>`).join("")}</div><button id="create-promo-btn" type="button">Create Promo</button></div></section>`;
 
     document.getElementById("add-touchpoint-btn")?.addEventListener("click", () => {
-      state.touchpoints.push({ id: `tp-${state.touchpoints.length + 1}`, order: state.touchpoints.length, offsetDays: 0, template: { subject: "", opening: "", body: "", closing: "" } });
+      state.touchpoints.push(buildPromotionTouchpointState({ order: state.touchpoints.length, offsetDays: 0 }, state.touchpoints.length));
       draw();
     });
 
@@ -2250,16 +2282,7 @@ function renderPromotionCreateFlow({ snapWindowDays, leads, promotions = [] }) {
     document.getElementById("create-promo-btn")?.addEventListener("click", async () => {
       state.name = document.getElementById("promo-name-edit")?.value || state.name;
       state.endDate = document.getElementById("promo-end-edit")?.value || state.endDate;
-      state.touchpoints = state.touchpoints.map((tp, index) => ({
-        ...tp,
-        offsetDays: Number.parseInt(document.querySelector(`[data-touchpoint-offset="${index}"]`)?.value || tp.offsetDays, 10) || 0,
-        template: {
-          subject: document.querySelector(`[data-touchpoint-subject="${index}"]`)?.value || "",
-          opening: document.querySelector(`[data-touchpoint-opening="${index}"]`)?.value || "",
-          body: document.querySelector(`[data-touchpoint-body="${index}"]`)?.value || "",
-          closing: document.querySelector(`[data-touchpoint-closing="${index}"]`)?.value || "",
-        },
-      }));
+      state.touchpoints = syncPromotionTouchpointsFromForm(state.touchpoints);
 
       const selectedLeads = leads.filter((lead) => state.selectedLeadIds.has(lead.id));
       if (!selectedLeads.length) return alert("Please select at least one lead.");

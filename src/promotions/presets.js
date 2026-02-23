@@ -1,3 +1,5 @@
+import { normalizePromotionTemplateConfig, toPromotionTemplatePayload } from "../templates/module.js";
+
 const PROMOTION_PRESETS = {
   precision_strike: {
     key: "precision_strike",
@@ -49,16 +51,16 @@ function buildPromotionTouchpoints(rawTouchpoints = []) {
   return rawTouchpoints
     .map((entry, index) => {
       const offsetDays = Number.parseInt(entry?.offsetDays, 10);
+      const templateSource = entry?.templateConfig || entry?.template || {};
+      const normalizedTemplate = normalizePromotionTemplateConfig(templateSource);
+      const touchpointOrder = Number.isInteger(entry?.order) ? entry.order : index;
       return {
         id: String(entry?.id || `touchpoint-${index + 1}`),
-        order: Number.isInteger(entry?.order) ? entry.order : index,
+        name: String(entry?.name || `Touchpoint ${touchpointOrder + 1}`),
+        order: touchpointOrder,
         offsetDays: Number.isNaN(offsetDays) ? 0 : Math.max(0, offsetDays),
-        template: {
-          subject: String(entry?.template?.subject || ""),
-          opening: String(entry?.template?.opening || ""),
-          body: String(entry?.template?.body || ""),
-          closing: String(entry?.template?.closing || ""),
-        },
+        template: toPromotionTemplatePayload(normalizedTemplate),
+        templateConfig: normalizedTemplate,
       };
     })
     .sort((a, b) => a.order - b.order);
