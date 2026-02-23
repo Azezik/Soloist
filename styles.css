@@ -409,6 +409,16 @@ select {
   grid-column: 1 / -1;
 }
 
+.promo-presets {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.promo-presets .secondary-btn {
+  width: 100%;
+  justify-content: space-between;
+}
+
 .filters-grid {
   margin-bottom: 1rem;
 }
