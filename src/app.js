@@ -2098,11 +2098,22 @@ async function renderPromotionsPage() {
   `;
 
   document.getElementById("new-promo-btn")?.addEventListener("click", () => {
-    renderPromotionCreateFlow({ snapWindowDays, leads });
+    renderPromotionCreateFlow({ snapWindowDays, leads, promotions });
   });
 }
 
-function renderPromotionCreateFlow({ snapWindowDays, leads }) {
+function toDateTimeLocalInputValue(value) {
+  const date = toPromotionDate(value);
+  if (!date) return "";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function renderPromotionCreateFlow({ snapWindowDays, leads, promotions = [] }) {
   const state = {
     page: 1,
     name: "",
@@ -2114,16 +2125,38 @@ function renderPromotionCreateFlow({ snapWindowDays, leads }) {
     searchText: "",
   };
 
-  const recentPresets = [
-    ...Object.values(PROMOTION_PRESETS).filter((entry) => entry.key !== "custom"),
-  ];
+  const recentPresets = promotions
+    .filter((promotion) => promotion?.configSnapshot)
+    .sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0))
+    .map((promotion) => ({
+      id: promotion.id,
+      name: promotion.name || "Untitled promo",
+      createdAt: toDate(promotion.createdAt),
+      configSnapshot: promotion.configSnapshot,
+    }));
+
+  const syncPage1StateFromInputs = () => {
+    const nameInput = document.getElementById("promo-name");
+    const endDateInput = document.getElementById("promo-end-date");
+    if (nameInput) state.name = nameInput.value;
+    if (endDateInput) state.endDate = endDateInput.value;
+  };
 
   const draw = () => {
     if (state.page === 1) {
-      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Promo</h2></div><div class="panel form-grid"><label>Promo Name<input id="promo-name" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-date" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><p><strong>Presets (Required Selection)</strong></p><div class="promo-presets">${Object.values(PROMOTION_PRESETS).map((preset) => `<button type="button" class="secondary-btn ${state.presetKey === preset.key ? "is-active" : ""}" data-preset-key="${preset.key}">${preset.label}</button>`).join("")}</div><p><strong>Recent Presets</strong></p><div>${recentPresets.map((preset) => `<button type="button" class="secondary-btn" data-preset-key="${preset.key}">${preset.label}</button>`).join("")}</div><button id="promo-continue-btn" type="button">Continue</button></div></section>`;
+      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Promo</h2></div><div class="panel form-grid"><label>Promo Name<input id="promo-name" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-date" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><p><strong>Presets (Required Selection)</strong></p><div class="promo-presets">${Object.values(PROMOTION_PRESETS).map((preset) => `<button type="button" class="secondary-btn full-width ${state.presetKey === preset.key ? "is-active" : ""}" data-preset-key="${preset.key}">${preset.label}</button>`).join("")}</div><p><strong>Recent Presets</strong></p><div class="promo-presets">${recentPresets.map((preset, index) => `<button type="button" class="secondary-btn full-width" data-recent-preset-index="${index}"><span>${escapeHtml(preset.name)}</span>${preset.createdAt ? `<small>${escapeHtml(preset.createdAt.toLocaleString())}</small>` : ""}</button>`).join("")}</div><button id="promo-continue-btn" type="button">Continue</button></div></section>`;
 
-      document.querySelectorAll("[data-preset-key]").forEach((buttonEl) => {
+      document.getElementById("promo-name")?.addEventListener("input", (event) => {
+        state.name = String(event.target.value || "");
+      });
+
+      document.getElementById("promo-end-date")?.addEventListener("input", (event) => {
+        state.endDate = String(event.target.value || "");
+      });
+
+      document.querySelectorAll(".promo-presets [data-preset-key]").forEach((buttonEl) => {
         buttonEl.addEventListener("click", () => {
+          syncPage1StateFromInputs();
           state.presetKey = buttonEl.dataset.presetKey || "custom";
           const preset = PROMOTION_PRESETS[state.presetKey] || PROMOTION_PRESETS.custom;
           state.touchpoints = preset.touchpoints.map((offset, index) => ({ id: `tp-${index + 1}`, order: index, offsetDays: offset, template: { subject: "", opening: "", body: "", closing: "" } }));
@@ -2132,9 +2165,37 @@ function renderPromotionCreateFlow({ snapWindowDays, leads }) {
         });
       });
 
+      document.querySelectorAll("[data-recent-preset-index]").forEach((buttonEl) => {
+        buttonEl.addEventListener("click", () => {
+          syncPage1StateFromInputs();
+          const presetIndex = Number.parseInt(buttonEl.dataset.recentPresetIndex || "", 10);
+          const selectedPreset = recentPresets[presetIndex];
+          if (!selectedPreset) return;
+          const snapshot = selectedPreset.configSnapshot;
+          state.name = snapshot.name || selectedPreset.name;
+          state.endDate = toDateTimeLocalInputValue(snapshot.endDate);
+          state.presetKey = snapshot.presetKey || "custom";
+          state.touchpoints = (snapshot.touchpoints || []).map((touchpoint, index) => ({
+            id: touchpoint.id || `tp-${index + 1}`,
+            order: Number.isFinite(touchpoint.order) ? touchpoint.order : index,
+            offsetDays: Number.parseInt(touchpoint.offsetDays, 10) || 0,
+            template: {
+              subject: touchpoint.template?.subject || "",
+              opening: touchpoint.template?.opening || "",
+              body: touchpoint.template?.body || "",
+              closing: touchpoint.template?.closing || "",
+            },
+          }));
+          state.targeting = [...(snapshot.targeting || [])];
+          state.searchText = "";
+          state.selectedLeadIds = new Set();
+          state.page = 2;
+          draw();
+        });
+      });
+
       document.getElementById("promo-continue-btn")?.addEventListener("click", () => {
-        state.name = document.getElementById("promo-name")?.value || "";
-        state.endDate = document.getElementById("promo-end-date")?.value || "";
+        syncPage1StateFromInputs();
         if (!state.name.trim() || !state.endDate || !state.presetKey) return alert("Name, end date, and preset are required.");
         state.page = 2;
         draw();
