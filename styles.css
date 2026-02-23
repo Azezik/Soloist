@@ -704,6 +704,15 @@ select {
   border-color: #3965ff;
 }
 
+.calendar-chip.calendar-item--promotion,
+.calendar-day-list-item.calendar-item--promotion,
+.calendar-allday-item.calendar-item--promotion,
+.calendar-week-event.calendar-item--promotion,
+.calendar-day-block.calendar-item--promotion {
+  background: rgba(35, 181, 127, 0.24);
+  border-color: #23b57f;
+}
+
 .calendar-item--task {
   background: rgba(209, 0, 31, 0.2);
   border-color: #d1001f;
@@ -712,6 +721,11 @@ select {
 .calendar-item--lead {
   background: rgba(57, 101, 255, 0.2);
   border-color: #3965ff;
+}
+
+.calendar-item--promotion {
+  background: rgba(35, 181, 127, 0.2);
+  border-color: #23b57f;
 }
 
 .calendar-item--projected {
