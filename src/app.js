@@ -31,7 +31,11 @@ import { renderCalendarScreen } from "./calendar/calendar-screen.js";
 import { rescheduleLeadAction } from "./data/calendar-service.js";
 import { PROMOTION_PRESETS, buildPromotionTouchpoints, toPromotionDate } from "./promotions/presets.js";
 import { computeTargetLeads, isLeadActive, qualifiesForSnap } from "./promotions/snap-engine.js";
-import { createPromotion, restoreSnappedLeadsAndDeletePromotion } from "./promotions/promotion-engine.js";
+import {
+  createPromotion,
+  restoreExpiredPromotionStageReplacements,
+  restoreSnappedLeadsAndDeletePromotion
+} from "./promotions/promotion-engine.js";
 import {
   DEFAULT_STAGE_TEMPLATE,
   LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER,
@@ -109,6 +113,7 @@ async function runNightlyRolloverIfDue() {
     .filter((lead) => isLeadEligibleForNightlyPush(lead, nowDate));
 
   await Promise.all(eligibleLeads.map((lead) => rescheduleLeadAction(currentUser.uid, lead.id, nextActionAtDate)));
+  await restoreExpiredPromotionStageReplacements({ db, userId: currentUser.uid, asOfDate: nowDate });
 
   await setDoc(
     rolloverStateRef,
@@ -1994,19 +1999,45 @@ async function reconcilePromotionLeadProgress(event, eventId) {
   );
   const siblings = siblingSnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
   const remaining = siblings.filter((item) => item.id !== eventId && !item.completed && item.status !== "skipped");
+  const completedSiblings = siblings.filter((item) => item.completed);
+
+  const snapshotRef = doc(db, "users", currentUser.uid, "promotions", event.promotionId, "snapshots", event.leadId);
+  const snapshotDoc = await getDoc(snapshotRef);
+  const snapshot = snapshotDoc.exists() ? snapshotDoc.data() || {} : null;
+
+  if (snapshot?.addedViaSnapActive === true) {
+    const completedTouchpointCount = completedSiblings.length;
+    await updateDoc(snapshotRef, {
+      completedTouchpointCount,
+      zeroTouchpointsCompleted: completedTouchpointCount === 0,
+      lastCompletedPromotionTouchpointAt: completedTouchpointCount
+        ? serverTimestamp()
+        : snapshot.lastCompletedPromotionTouchpointAt || null,
+      updatedAt: serverTimestamp(),
+    });
+  }
 
   if (remaining.length === 0 && event.leadId) {
     const leadRef = doc(db, "users", currentUser.uid, "leads", event.leadId);
     const [leadSnapshot, pipelineSettings] = await Promise.all([getDoc(leadRef), getPipelineSettings(currentUser.uid)]);
     if (leadSnapshot.exists()) {
+      const completedAt = toDate(event.completedAt) || new Date();
       await completeLeadStage({
         userId: currentUser.uid,
         leadRef,
         lead: leadSnapshot.data(),
         leadSource: "leads",
         pipelineSettings,
-        completedAt: toDate(event.scheduledFor) || new Date(),
+        completedAt,
       });
+
+      if (snapshotDoc.exists()) {
+        await updateDoc(snapshotRef, {
+          promotionResolvedAt: serverTimestamp(),
+          lastCompletedPromotionTouchpointAt: toDate(event.completedAt) ? Timestamp.fromDate(toDate(event.completedAt)) : serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
     }
   }
 }
@@ -2019,15 +2050,16 @@ async function markPromotionEventDone(eventId) {
   const event = { id: eventSnapshot.id, ...eventSnapshot.data() };
   if (event.completed || event.status === "skipped") return;
 
+  const completedAt = new Date();
   await updateDoc(eventRef, {
     completed: true,
     archived: true,
     status: "completed",
-    completedAt: serverTimestamp(),
+    completedAt: Timestamp.fromDate(completedAt),
     updatedAt: serverTimestamp(),
   });
 
-  await reconcilePromotionLeadProgress(event, eventId);
+  await reconcilePromotionLeadProgress({ ...event, completedAt }, eventId);
 }
 
 async function markPromotionEventSkipped(eventId) {
