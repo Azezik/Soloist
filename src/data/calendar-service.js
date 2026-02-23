@@ -12,10 +12,11 @@ export async function rescheduleLeadAction(currentUserId, leadId, nextDate) {
 }
 
 export async function getCalendarData(currentUserId) {
-  const [contactsSnapshot, tasksSnapshot, leadsSnapshot] = await Promise.all([
+  const [contactsSnapshot, tasksSnapshot, leadsSnapshot, promotionEventsSnapshot] = await Promise.all([
     getDocs(collection(db, "users", currentUserId, "contacts")),
     getDocs(collection(db, "users", currentUserId, "tasks")),
     getDocs(collection(db, "users", currentUserId, "leads")),
+    getDocs(collection(db, "users", currentUserId, "promotionEvents")),
   ]);
 
   const contactsById = contactsSnapshot.docs.reduce((acc, docItem) => {
@@ -40,15 +41,27 @@ export async function getCalendarData(currentUserId) {
       };
     });
 
-  return { tasks, leads };
+  const promotionEvents = promotionEventsSnapshot.docs
+    .map((eventDoc) => ({ id: eventDoc.id, ...eventDoc.data() }))
+    .filter((event) => event.deleted !== true && !event.completed && !event.archived);
+
+  return { tasks, leads, promotionEvents };
 }
 
 export async function updateCalendarItemSchedule(currentUserId, calendarItem, nextDate) {
   if (!currentUserId || !calendarItem?.id || !calendarItem?.type || !(nextDate instanceof Date)) return;
 
-  const isTask = calendarItem.type === "task";
-  if (!isTask) {
+  if (calendarItem.type === "lead") {
     await rescheduleLeadAction(currentUserId, calendarItem.id, nextDate);
+    return;
+  }
+
+  if (calendarItem.type === "promotion") {
+    const eventRef = doc(db, "users", currentUserId, "promotionEvents", calendarItem.id);
+    await updateDoc(eventRef, {
+      scheduledFor: Timestamp.fromDate(nextDate),
+      updatedAt: serverTimestamp(),
+    });
     return;
   }
 

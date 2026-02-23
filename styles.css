@@ -9,6 +9,7 @@
   --crm-divider: rgba(255, 255, 255, 0.18);
   --lead-border: #2459ff;
   --task-border: #d1001f;
+  --promotion-border: #17a34a;
 }
 
 * {
@@ -320,6 +321,12 @@ button:active {
   border-width: 1px;
 }
 
+.crm-view .feed-item--promotion,
+.crm-view .panel--promo {
+  border-color: var(--promotion-border);
+  border-width: 1px;
+}
+
 .crm-view button,
 .crm-view input,
 .crm-view textarea,
@@ -375,6 +382,12 @@ select {
 .feed-item--task,
 .panel--task {
   border-color: var(--task-border);
+  border-width: 1px;
+}
+
+.feed-item--promotion,
+.panel--promo {
+  border-color: var(--promotion-border);
   border-width: 1px;
 }
 
@@ -979,4 +992,9 @@ select {
 }
 .lead-template-output--placeholder::placeholder {
   color: rgba(255, 255, 255, 0.45);
+}
+
+.secondary-btn.is-active,
+button.is-active {
+  border-color: var(--promotion-border);
 }

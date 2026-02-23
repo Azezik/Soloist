@@ -43,7 +43,9 @@ function escapeHtml(value = "") {
 }
 
 function getItemClass(itemType) {
-  return itemType === "task" ? "calendar-item--task" : "calendar-item--lead";
+  if (itemType === "task") return "calendar-item--task";
+  if (itemType === "promotion") return "calendar-item--promotion";
+  return "calendar-item--lead";
 }
 
 function getProjectedClass(item) {
@@ -582,7 +584,7 @@ function getRenderableItems(state) {
 }
 
 export async function renderCalendarScreen({ viewContainer, currentUserId, initialView, initialDate }) {
-  const [{ tasks, leads }, pipelineSettings] = await Promise.all([
+  const [{ tasks, leads, promotionEvents }, pipelineSettings] = await Promise.all([
     getCalendarData(currentUserId),
     getPipelineSettings(currentUserId),
   ]);
@@ -592,7 +594,7 @@ export async function renderCalendarScreen({ viewContainer, currentUserId, initi
     currentUserId,
     focusedDate: startOfDay(initialDate || new Date()),
     view: initialView || VIEW_MONTH,
-    items: normalizeCalendarItems(tasks, leads),
+    items: normalizeCalendarItems(tasks, leads, promotionEvents),
     leads,
     pipelineSettings,
     dragState: null,
