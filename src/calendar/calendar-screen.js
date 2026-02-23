@@ -222,7 +222,7 @@ function attachSharedDragEvents(state) {
 function renderMonthView(state) {
   const monthDate = startOfMonth(state.focusedDate);
   const grid = buildMonthGrid(monthDate, 0);
-  const byDay = groupItemsByDay(getRenderableItems(state));
+  const byDay = groupItemsByDay(getRenderableItems(state, { includeProjected: false }));
 
   const gridMarkup = grid
     .map((cell) => {
@@ -570,14 +570,19 @@ function getVisibleRangeForView(state) {
   return { start: startOfDay(grid[0].date), end: addDays(startOfDay(grid[grid.length - 1].date), 1) };
 }
 
-function getRenderableItems(state) {
+function getRenderableItems(state, options = {}) {
+  const includeProjected = options.includeProjected ?? true;
   const range = getVisibleRangeForView(state);
-  const cacheKey = `${state.view}:${toDayKey(range.start)}:${toDayKey(range.end)}:${state.projectionRevision}`;
+  const cacheKey = `${state.view}:${includeProjected ? "with-projections" : "base-only"}:${toDayKey(range.start)}:${toDayKey(
+    range.end
+  )}:${state.projectionRevision}`;
   if (state.projectionCache.has(cacheKey)) {
     return state.projectionCache.get(cacheKey);
   }
 
-  const projectedItems = buildProjectedLeadItems(state.leads, state.pipelineSettings, range.start, range.end);
+  const projectedItems = includeProjected
+    ? buildProjectedLeadItems(state.leads, state.pipelineSettings, range.start, range.end)
+    : [];
   const items = [...state.items, ...projectedItems].sort((a, b) => a.date.getTime() - b.date.getTime());
   state.projectionCache.set(cacheKey, items);
   return items;
