@@ -2,14 +2,17 @@ import { addDoc, collection, doc, serverTimestamp, setDoc, Timestamp, updateDoc 
 import { computeTouchpointDate, qualifiesForSnap } from "./snap-engine.js";
 import { toPromotionDate } from "./presets.js";
 
+function clampString(value, maxLen) {
+  const normalized = String(value || "");
+  return normalized.length <= maxLen ? normalized : normalized.slice(0, maxLen);
+}
+
 function buildPromotionEvents(promotionId, lead, touchpoints, endDate) {
   return touchpoints.map((touchpoint) => {
     const scheduledDate = computeTouchpointDate(endDate, touchpoint.offsetDays);
-    return {
+    const event = {
       promotionId,
       leadId: lead.id,
-      contactId: lead.contactId || null,
-      stageId: lead.stageId || null,
       offsetDays: touchpoint.offsetDays,
       touchpointId: touchpoint.id,
       touchpointOrder: touchpoint.order,
@@ -21,10 +24,15 @@ function buildPromotionEvents(promotionId, lead, touchpoints, endDate) {
       archived: false,
       status: "open",
       type: "promotion",
-      name: `${lead.name || lead.product || "Lead"} – ${touchpoint.name || "Promo"}`,
+      name: clampString(`${lead.name || lead.product || "Lead"} – ${touchpoint.name || "Promo"}`, 500),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
+
+    if (lead.contactId) event.contactId = lead.contactId;
+    if (lead.stageId) event.stageId = lead.stageId;
+
+    return event;
   });
 }
 
@@ -33,7 +41,7 @@ async function createPromotion({ db, userId, promotion, selectedLeads, snapWindo
   if (!endDate) throw new Error("Invalid end date");
 
   const promotionRef = await addDoc(collection(db, "users", userId, "promotions"), {
-    name: promotion.name,
+    name: clampString(promotion.name, 500),
     endDate: Timestamp.fromDate(endDate),
     touchpoints: promotion.touchpoints,
     targeting: promotion.targeting,
@@ -49,12 +57,13 @@ async function createPromotion({ db, userId, promotion, selectedLeads, snapWindo
   for (const lead of selectedLeads) {
     const snapped = qualifiesForSnap(lead, promotion.touchpoints, endDate, snapWindowDays, pipelineStages);
     if (snapped) {
-      await setDoc(doc(db, "users", userId, "promotions", promotionRef.id, "snapshots", lead.id), {
+      const snapshotPayload = {
         leadId: lead.id,
-        originalStageId: lead.stageId || null,
         originalScheduledDate: lead.nextActionAt || null,
         snappedAt: serverTimestamp(),
-      });
+      };
+      if (lead.stageId) snapshotPayload.originalStageId = lead.stageId;
+      await setDoc(doc(db, "users", userId, "promotions", promotionRef.id, "snapshots", lead.id), snapshotPayload);
       await updateDoc(doc(db, "users", userId, "leads", lead.id), {
         nextActionAt: null,
         updatedAt: serverTimestamp(),
