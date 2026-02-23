@@ -55,6 +55,7 @@ const appPage = document.getElementById("app-page");
 const viewContainer = document.getElementById("view-container");
 
 let currentUser = null;
+let authStateResolved = false;
 let nightlyRolloverTimerId = null;
 const NIGHTLY_ROLLOVER_HOUR = 23;
 const NIGHTLY_ROLLOVER_MINUTE = 59;
@@ -2651,7 +2652,7 @@ async function renderSettingsPage() {
 }
 
 async function renderCurrentRoute() {
-  if (!currentUser) return;
+  if (!authStateResolved || !currentUser) return;
 
   const route = routeFromHash();
 
@@ -2796,6 +2797,7 @@ logoutBtn.addEventListener("click", async () => {
 });
 
 onAuthStateChanged(auth, async (user) => {
+  authStateResolved = true;
   currentUser = user;
 
   if (user) {
@@ -2821,5 +2823,6 @@ onAuthStateChanged(auth, async (user) => {
 });
 
 window.addEventListener("hashchange", () => {
+  if (!authStateResolved) return;
   renderCurrentRoute();
 });
