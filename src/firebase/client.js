@@ -13,6 +13,7 @@ import {
 import {
   addDoc,
   collection,
+  deleteField,
   deleteDoc,
   doc,
   getDoc,
@@ -54,6 +55,7 @@ export {
   addDoc,
   collection,
   createUserWithEmailAndPassword,
+  deleteField,
   deleteDoc,
   doc,
   getDoc,

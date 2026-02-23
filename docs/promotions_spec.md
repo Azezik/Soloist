@@ -296,7 +296,15 @@ Permanently delete those scheduled events.
 Replace stage execution with promotion touchpoints.
 
 Internal Engineering Note:
-At snap time, store originalStageId and originalScheduledDate internally before deletion. This data is not exposed to the UI and is not used to restore state automatically. It exists strictly for deterministic recalculation, debugging, and future-proofing.
+At snap time, store originalStageId and originalScheduledDate internally in `promotions/{promotionId}/snapshots/{leadId}`.
+This state is used for deterministic per-lead restoration when deleting a promotion.
+
+Promotion Deletion Restoration:
+- Delete the promotion document.
+- Delete all `events` where `promotionId` matches.
+- For each snapshot lead, restore that specific lead's `stageId` and `nextActionAt` from snapshot state.
+- Remove temporary snap metadata fields from each restored lead.
+- If a lead changed independently after snap, current behavior is **authoritative restore** (snapshot wins) to preserve deterministic “as-if-promotion-never-existed” semantics.
 
 The original scheduled stage events:
 

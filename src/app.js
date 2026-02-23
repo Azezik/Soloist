@@ -31,7 +31,7 @@ import { renderCalendarScreen } from "./calendar/calendar-screen.js";
 import { rescheduleLeadAction } from "./data/calendar-service.js";
 import { PROMOTION_PRESETS, buildPromotionTouchpoints, toPromotionDate } from "./promotions/presets.js";
 import { computeTargetLeads, isLeadActive, qualifiesForSnap } from "./promotions/snap-engine.js";
-import { createPromotion } from "./promotions/promotion-engine.js";
+import { createPromotion, restoreSnappedLeadsAndDeletePromotion } from "./promotions/promotion-engine.js";
 import {
   DEFAULT_STAGE_TEMPLATE,
   LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER,
@@ -2194,7 +2194,7 @@ async function renderPromotionDetail(promotionId) {
     return `<details class="panel" open><summary><strong>${escapeHtml(touchpoint.name || `Touchpoint ${index + 1}`)}</strong> · ${escapeHtml(`Touchpoint ${index + 1} of ${touchpoints.length}`)}</summary><p><strong>Due:</strong> ${formatDate(toPromotionDate(promotion.endDate) ? Timestamp.fromDate(new Date(toPromotionDate(promotion.endDate).getTime() - (Number(touchpoint.offsetDays) || 0) * 86400000)) : null)}</p><p><strong>Template Variables:</strong> ${variables.length ? escapeHtml(variables.join(", ")) : "None"}</p><label>Preview As… <select data-preview-touchpoint="${touchpoint.id}">${leadOptions.map((entry) => `<option value="${entry.event.leadId}">${escapeHtml(entry.name)}</option>`).join("")}</select></label><label class="full-width">Base Template Preview<textarea rows="5" readonly>${escapeHtml(renderTemplateWithLead(templateConfig, "").trim())}</textarea></label><label class="full-width">Preview Output<textarea rows="5" readonly data-preview-output="${touchpoint.id}">${escapeHtml(personalizedPreview)}</textarea></label><div class="table-wrap"><table><thead><tr><th>Lead</th><th>Product</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rowsMarkup}</tbody></table></div></details>`;
   }).join("");
 
-  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(promotion.name || "Promotion")}</h2><div class="view-header-actions"><button id="promotion-back-btn" type="button" class="secondary-btn">Back</button><button id="promotion-edit-btn" type="button" class="secondary-btn">Edit</button></div></div><div class="panel detail-grid"><p><strong>End Date:</strong> ${formatDate(promotion.endDate)}</p><p><strong>Cohort Size:</strong> ${Array.isArray(promotion.leadIds) ? promotion.leadIds.length : 0}</p><p><strong>Status:</strong> ${escapeHtml(promotion.status || "active")}</p></div>${touchpointMarkup || '<p class="view-message">No touchpoints configured.</p>'}</section>`;
+  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(promotion.name || "Promotion")}</h2><div class="view-header-actions"><button id="promotion-back-btn" type="button" class="secondary-btn">Back</button><button id="promotion-edit-btn" type="button" class="secondary-btn">Edit</button></div></div><div class="panel detail-grid panel--promo-summary"><p><strong>End Date:</strong> ${formatDate(promotion.endDate)}</p><p><strong>Cohort Size:</strong> ${Array.isArray(promotion.leadIds) ? promotion.leadIds.length : 0}</p><p><strong>Status:</strong> ${escapeHtml(promotion.status || "active")}</p></div><div class="promotion-touchpoints-stack">${touchpointMarkup || '<p class="view-message">No touchpoints configured.</p>'}</div></section>`;
 
   document.getElementById("promotion-back-btn")?.addEventListener("click", () => { window.location.hash = "#promotions"; });
   document.getElementById("promotion-edit-btn")?.addEventListener("click", () => {
@@ -2285,14 +2285,14 @@ async function renderPromotionsPage() {
     return endDate && endDate.getTime() < now.getTime();
   }).sort((a, b) => (toPromotionDate(b.endDate)?.getTime() || 0) - (toPromotionDate(a.endDate)?.getTime() || 0));
 
-  const renderCards = (items) => items.length ? items.map((promo) => `<article class="panel panel--promo feed-item-clickable" data-open-promotion="${promo.id}" tabindex="0" role="button"><h3>${escapeHtml(promo.name || "Untitled promo")}</h3></article>`).join("") : `<p class="view-message">No promotions.</p>`;
+  const renderCards = (items) => items.length ? items.map((promo) => `<article class="panel panel--promo feed-item-clickable promotion-list-card" data-open-promotion="${promo.id}" tabindex="0" role="button"><p class="feed-type">Promotion</p><h3>${escapeHtml(promo.name || "Untitled promo")}</h3><p><strong>Ends:</strong> ${formatDate(promo.endDate)}</p><p><strong>Cohort:</strong> ${Array.isArray(promo.leadIds) ? promo.leadIds.length : 0}</p></article>`).join("") : `<p class="view-message">No promotions.</p>`;
 
   viewContainer.innerHTML = `
     <section class="crm-view crm-view--promotions">
       <div class="view-header"><h2>Promotions</h2></div>
-      <div class="panel"><button id="new-promo-btn" class="full-width" type="button">New Promo ></button></div>
-      <div class="panel"><h3>Active</h3><div>${renderCards(active)}</div></div>
-      <div class="panel"><h3>Finished</h3><div>${renderCards(finished)}</div></div>
+      <div class="panel panel--promo-actions"><button id="new-promo-btn" class="full-width" type="button">New Promotion</button></div>
+      <div class="panel panel--promo-section"><h3>Active</h3><div class="promotion-list-grid">${renderCards(active)}</div></div>
+      <div class="panel panel--promo-section"><h3>Finished</h3><div class="promotion-list-grid">${renderCards(finished)}</div></div>
     </section>
   `;
 
@@ -2416,7 +2416,7 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
 
   const draw = () => {
     if (state.page === 1) {
-      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Promo</h2></div><div class="panel form-grid"><label>Promo Name<input id="promo-name" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-date" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><p><strong>Presets (Required Selection)</strong></p><div class="promo-presets">${Object.values(PROMOTION_PRESETS).map((preset) => `<button type="button" class="secondary-btn full-width ${state.presetKey === preset.key ? "is-active" : ""}" data-preset-key="${preset.key}">${preset.label}</button>`).join("")}</div><p><strong>Recent Presets</strong></p><div class="promo-presets">${recentPresets.map((preset, index) => `<button type="button" class="secondary-btn full-width" data-recent-preset-index="${index}"><span>${escapeHtml(preset.name)}</span>${preset.createdAt ? `<small>${escapeHtml(preset.createdAt.toLocaleString())}</small>` : ""}</button>`).join("")}</div><button id="promo-continue-btn" type="button">Continue</button></div></section>`;
+      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Promotion</h2></div><div class="panel form-grid promotion-config-panel"><label>Promo Name<input id="promo-name" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-date" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><p><strong>Presets (Required Selection)</strong></p><div class="promo-presets">${Object.values(PROMOTION_PRESETS).map((preset) => `<button type="button" class="secondary-btn full-width ${state.presetKey === preset.key ? "is-active" : ""}" data-preset-key="${preset.key}">${preset.label}</button>`).join("")}</div><p><strong>Recent Presets</strong></p><div class="promo-presets">${recentPresets.map((preset, index) => `<button type="button" class="secondary-btn full-width" data-recent-preset-index="${index}"><span>${escapeHtml(preset.name)}</span>${preset.createdAt ? `<small>${escapeHtml(preset.createdAt.toLocaleString())}</small>` : ""}</button>`).join("")}</div><button id="promo-continue-btn" type="button">Continue</button></div></section>`;
 
       document.querySelectorAll("[data-preset-key]").forEach((buttonEl) => {
         buttonEl.addEventListener("click", () => {
@@ -2455,7 +2455,7 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
     }
 
     const cohortLeads = leads.filter((lead) => state.cohortDraftLeadIds.has(lead.id));
-    viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${state.isEdit ? "Edit Promotion" : "Promotion Setup"}</h2></div><div class="panel form-grid"><h3>Basic Info</h3><label>Promo Name<input id="promo-name-edit" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-edit" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><h3>Touchpoints</h3><div id="touchpoint-list">${state.touchpoints.map((tp, index) => buildPromotionTouchpointMarkup(tp, index)).join("")}</div><button id="add-touchpoint-btn" class="secondary-btn" type="button">Add Touchpoint</button><h3>Add to Cohort</h3><div class="button-row"><button type="button" class="secondary-btn" data-add-group="snap_active">Snap Active Leads</button><button type="button" class="secondary-btn" data-add-group="drop_out">Drop Off Leads</button><button type="button" class="secondary-btn" data-add-group="all_active">All Active Leads</button><button type="button" class="secondary-btn" id="clear-cohort-btn">Clear Cohort</button></div><label>Custom Search (additive)<input id="promo-search" value="${escapeHtml(state.searchText)}" placeholder="Name or product" /></label><div id="promo-search-results" class="lead-list"></div><h3>Cohort Preview (source of truth)</h3><div id="promo-cohort-preview" class="lead-list"></div><button id="create-promo-btn" type="button">${state.isEdit ? "Save Promotion" : "Create Promo"}</button></div></section>`;
+    viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${state.isEdit ? "Edit Promotion" : "Promotion Setup"}</h2></div><div class="panel form-grid promotion-config-panel"><h3>Basic Info</h3><label>Promo Name<input id="promo-name-edit" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-edit" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><h3>Touchpoints</h3><div id="touchpoint-list" class="promotion-touchpoints-stack">${state.touchpoints.map((tp, index) => buildPromotionTouchpointMarkup(tp, index)).join("")}</div><button id="add-touchpoint-btn" class="secondary-btn" type="button">Add Touchpoint</button><h3>Add to Cohort</h3><div class="button-row promotion-group-actions"><button type="button" class="secondary-btn" data-add-group="snap_active">Snap Active Leads</button><button type="button" class="secondary-btn" data-add-group="drop_out">Drop Off Leads</button><button type="button" class="secondary-btn" data-add-group="all_active">All Active Leads</button><button type="button" class="secondary-btn" id="clear-cohort-btn">Clear Cohort</button></div><label>Custom Search (additive)<input id="promo-search" value="${escapeHtml(state.searchText)}" placeholder="Name or product" /></label><div id="promo-search-results" class="lead-list promotion-lead-list"></div><h3>Cohort Preview (source of truth)</h3><div id="promo-cohort-preview" class="lead-list promotion-lead-list"></div><div class="button-row promotion-submit-row"><button id="create-promo-btn" type="button">${state.isEdit ? "Save Promotion" : "Create Promotion"}</button>${state.isEdit ? '<button id="delete-promo-btn" type="button" class="secondary-btn danger-btn">Delete Promotion</button>' : ""}</div></div></section>`;
 
     const syncFromForm = () => {
       state.name = document.getElementById("promo-name-edit")?.value || state.name;
@@ -2539,6 +2539,18 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
       syncFromForm();
       state.touchpoints.push(buildPromotionTouchpointState({ order: state.touchpoints.length, offsetDays: 0 }, state.touchpoints.length));
       draw();
+    });
+
+    document.getElementById("delete-promo-btn")?.addEventListener("click", async () => {
+      if (!state.editingPromotionId) return;
+      if (!window.confirm("Delete this promotion? This will remove all associated touchpoint events and restore snapped leads to their original timeline and stage.")) return;
+      try {
+        await restoreSnappedLeadsAndDeletePromotion({ db, userId: currentUser.uid, promotionId: state.editingPromotionId });
+        await renderPromotionsPage();
+      } catch (error) {
+        console.error("Failed to delete promotion", error);
+        alert(`Could not delete promotion: ${error?.message || "Unknown error"}`);
+      }
     });
 
     document.getElementById("create-promo-btn")?.addEventListener("click", async () => {
