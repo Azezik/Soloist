@@ -7,6 +7,12 @@ function clampString(value, maxLen) {
   return normalized.length <= maxLen ? normalized : normalized.slice(0, maxLen);
 }
 
+function permissionError(step, error) {
+  const message = error?.message || "Unknown Firestore error";
+  const code = error?.code ? ` (${error.code})` : "";
+  return new Error(`Promotion save failed at ${step}${code}: ${message}`);
+}
+
 function buildPromotionEvents(promotionId, lead, touchpoints, endDate) {
   return touchpoints.map((touchpoint) => {
     const scheduledDate = computeTouchpointDate(endDate, touchpoint.offsetDays);
@@ -40,19 +46,24 @@ async function createPromotion({ db, userId, promotion, selectedLeads, snapWindo
   const endDate = toPromotionDate(promotion.endDate);
   if (!endDate) throw new Error("Invalid end date");
 
-  const promotionRef = await addDoc(collection(db, "users", userId, "promotions"), {
-    name: clampString(promotion.name, 500),
-    endDate: Timestamp.fromDate(endDate),
-    touchpoints: promotion.touchpoints,
-    targeting: promotion.targeting,
-    leadIds: selectedLeads.map((lead) => lead.id),
-    presetKey: promotion.presetKey || "custom",
-    presetLabel,
-    status: "active",
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-    configSnapshot: promotion,
-  });
+  let promotionRef;
+  try {
+    promotionRef = await addDoc(collection(db, "users", userId, "promotions"), {
+      name: clampString(promotion.name, 500),
+      endDate: Timestamp.fromDate(endDate),
+      touchpoints: promotion.touchpoints,
+      targeting: promotion.targeting,
+      leadIds: selectedLeads.map((lead) => lead.id),
+      presetKey: promotion.presetKey || "custom",
+      presetLabel,
+      status: "active",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      configSnapshot: promotion,
+    });
+  } catch (error) {
+    throw permissionError("promotion document create", error);
+  }
 
   for (const lead of selectedLeads) {
     const snapped = qualifiesForSnap(lead, promotion.touchpoints, endDate, snapWindowDays, pipelineStages);
@@ -63,16 +74,28 @@ async function createPromotion({ db, userId, promotion, selectedLeads, snapWindo
         snappedAt: serverTimestamp(),
       };
       if (lead.stageId) snapshotPayload.originalStageId = lead.stageId;
-      await setDoc(doc(db, "users", userId, "promotions", promotionRef.id, "snapshots", lead.id), snapshotPayload);
-      await updateDoc(doc(db, "users", userId, "leads", lead.id), {
-        nextActionAt: null,
-        updatedAt: serverTimestamp(),
-      });
+      try {
+        await setDoc(doc(db, "users", userId, "promotions", promotionRef.id, "snapshots", lead.id), snapshotPayload);
+      } catch (error) {
+        throw permissionError(`promotion snapshot create for lead ${lead.id}`, error);
+      }
+      try {
+        await updateDoc(doc(db, "users", userId, "leads", lead.id), {
+          nextActionAt: null,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (error) {
+        throw permissionError(`lead update after snapshot for lead ${lead.id}`, error);
+      }
     }
 
     const events = buildPromotionEvents(promotionRef.id, lead, promotion.touchpoints, endDate);
     for (const event of events) {
-      await addDoc(collection(db, "users", userId, "promotionEvents"), event);
+      try {
+        await addDoc(collection(db, "users", userId, "promotionEvents"), event);
+      } catch (error) {
+        throw permissionError(`promotion event create for lead ${lead.id}`, error);
+      }
     }
   }
 

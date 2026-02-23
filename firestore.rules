@@ -93,7 +93,13 @@ service cloud.firestore {
 
       match /promotions/{promotionId} {
         allow read: if isSignedInOwner(userId);
-        allow create, update: if isSignedInOwner(userId)
+        allow create: if isSignedInOwner(userId)
+          && noPrivilegeFields()
+          && validString('name', 500)
+          && validString('presetKey', 80)
+          && validString('presetLabel', 120)
+          && validString('status', 40);
+        allow update: if isSignedInOwner(userId)
           && noPrivilegeFields()
           && createdAtImmutable()
           && validString('name', 500)
@@ -104,7 +110,11 @@ service cloud.firestore {
 
         match /snapshots/{snapshotId} {
           allow read: if isSignedInOwner(userId);
-          allow create, update: if isSignedInOwner(userId)
+          allow create: if isSignedInOwner(userId)
+            && noPrivilegeFields()
+            && validString('leadId', 128)
+            && validOptionalString('originalStageId', 80);
+          allow update: if isSignedInOwner(userId)
             && noPrivilegeFields()
             && createdAtImmutable()
             && validString('leadId', 128)
@@ -115,7 +125,19 @@ service cloud.firestore {
 
       match /promotionEvents/{promotionEventId} {
         allow read: if isSignedInOwner(userId);
-        allow create, update: if isSignedInOwner(userId)
+        allow create: if isSignedInOwner(userId)
+          && noPrivilegeFields()
+          && validString('promotionId', 128)
+          && validString('leadId', 128)
+          && validOptionalString('contactId', 128)
+          && validOptionalString('stageId', 80)
+          && validString('touchpointId', 128)
+          && validString('status', 40)
+          && validString('type', 40)
+          && validString('name', 500)
+          && (!('completed' in request.resource.data) || request.resource.data.completed is bool)
+          && (!('archived' in request.resource.data) || request.resource.data.archived is bool);
+        allow update: if isSignedInOwner(userId)
           && noPrivilegeFields()
           && createdAtImmutable()
           && validString('promotionId', 128)
