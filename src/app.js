@@ -29,7 +29,7 @@ import {
 import { getAppSettings, getPipelineSettings, pipelineSettingsRef } from "./data/settings-service.js";
 import { renderCalendarScreen } from "./calendar/calendar-screen.js";
 import { rescheduleLeadAction } from "./data/calendar-service.js";
-import { PROMOTION_PRESETS, TARGETING_OPTIONS, buildPromotionTouchpoints, toPromotionDate } from "./promotions/presets.js";
+import { PROMOTION_PRESETS, buildPromotionTouchpoints, toPromotionDate } from "./promotions/presets.js";
 import { computeTargetLeads, isLeadActive, qualifiesForSnap } from "./promotions/snap-engine.js";
 import { createPromotion } from "./promotions/promotion-engine.js";
 import {
@@ -409,7 +409,7 @@ function routeFromHash() {
   if (hash === "calendar") return { page: "calendar", params };
   if (hash === "tasks/new") return { page: "add-task" };
   if (hash === "add-task") return { page: "add-task" };
-  if (hash === "promotions") return { page: "promotions" };
+  if (hash === "promotions") return { page: "promotions", params };
   if (hash === "settings") return { page: "settings" };
   if (hash.startsWith("contact/") && hash.endsWith("/edit")) {
     const parts = hash.split("/");
@@ -440,6 +440,10 @@ function routeFromHash() {
 
   if (hash.startsWith("promotion-event/")) {
     return { page: "promotion-event-detail", promotionEventId: hash.split("/")[1], params };
+  }
+
+  if (hash.startsWith("promotion/")) {
+    return { page: "promotion-detail", promotionId: hash.split("/")[1], params };
   }
 
   return { page: "dashboard" };
@@ -1984,27 +1988,12 @@ function renderPlaceholder(title) {
   `;
 }
 
-async function markPromotionEventDone(eventId) {
-  const eventRef = doc(db, "users", currentUser.uid, "events", eventId);
-  const eventSnapshot = await getDoc(eventRef);
-  if (!eventSnapshot.exists()) return;
-
-  const event = { id: eventSnapshot.id, ...eventSnapshot.data() };
-  if (event.completed) return;
-
-  await updateDoc(eventRef, {
-    completed: true,
-    archived: true,
-    status: "completed",
-    completedAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
+async function reconcilePromotionLeadProgress(event, eventId) {
   const siblingSnapshot = await getDocs(
     query(collection(db, "users", currentUser.uid, "events"), where("promotionId", "==", event.promotionId), where("leadId", "==", event.leadId))
   );
   const siblings = siblingSnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
-  const remaining = siblings.filter((item) => !item.completed && item.id !== eventId);
+  const remaining = siblings.filter((item) => item.id !== eventId && !item.completed && item.status !== "skipped");
 
   if (remaining.length === 0 && event.leadId) {
     const leadRef = doc(db, "users", currentUser.uid, "leads", event.leadId);
@@ -2020,6 +2009,52 @@ async function markPromotionEventDone(eventId) {
       });
     }
   }
+}
+
+async function markPromotionEventDone(eventId) {
+  const eventRef = doc(db, "users", currentUser.uid, "events", eventId);
+  const eventSnapshot = await getDoc(eventRef);
+  if (!eventSnapshot.exists()) return;
+
+  const event = { id: eventSnapshot.id, ...eventSnapshot.data() };
+  if (event.completed || event.status === "skipped") return;
+
+  await updateDoc(eventRef, {
+    completed: true,
+    archived: true,
+    status: "completed",
+    completedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  await reconcilePromotionLeadProgress(event, eventId);
+}
+
+async function markPromotionEventSkipped(eventId) {
+  const eventRef = doc(db, "users", currentUser.uid, "events", eventId);
+  const eventSnapshot = await getDoc(eventRef);
+  if (!eventSnapshot.exists()) return;
+
+  const event = { id: eventSnapshot.id, ...eventSnapshot.data() };
+  if (event.completed || event.status === "skipped") return;
+
+  await updateDoc(eventRef, {
+    status: "skipped",
+    archived: true,
+    completed: false,
+    skippedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  await reconcilePromotionLeadProgress(event, eventId);
+}
+
+function detectTemplateVariables(templateConfig = {}) {
+  const text = [templateConfig.subjectText, templateConfig.introText, templateConfig.bodyText, templateConfig.outroText]
+    .map((entry) => String(entry || ""))
+    .join("\n");
+  const matches = text.match(/\{[^}]+\}|\[Name\]/g) || [];
+  return [...new Set(matches)];
 }
 
 async function renderPromotionEventDetail(eventId) {
@@ -2100,6 +2135,118 @@ async function renderPromotionEventDetail(eventId) {
   });
 }
 
+async function renderPromotionDetail(promotionId) {
+  renderLoading("Loading promotion...");
+  const promotionRef = doc(db, "users", currentUser.uid, "promotions", promotionId);
+  const promotionSnapshot = await getDoc(promotionRef);
+  if (!promotionSnapshot.exists()) {
+    viewContainer.innerHTML = '<p class="view-message">Promotion not found.</p>';
+    return;
+  }
+
+  const promotion = { id: promotionSnapshot.id, ...promotionSnapshot.data() };
+  const [eventsSnapshot, leadsSnapshot, contactsSnapshot] = await Promise.all([
+    getDocs(query(collection(db, "users", currentUser.uid, "events"), where("promotionId", "==", promotionId))),
+    getDocs(collection(db, "users", currentUser.uid, "leads")),
+    getDocs(collection(db, "users", currentUser.uid, "contacts")),
+  ]);
+
+  const leadsById = leadsSnapshot.docs.reduce((acc, leadDoc) => {
+    acc[leadDoc.id] = { id: leadDoc.id, ...leadDoc.data() };
+    return acc;
+  }, {});
+  const contactsById = contactsSnapshot.docs.reduce((acc, contactDoc) => {
+    acc[contactDoc.id] = { id: contactDoc.id, ...contactDoc.data() };
+    return acc;
+  }, {});
+
+  const events = eventsSnapshot.docs.map((eventDoc) => ({ id: eventDoc.id, ...eventDoc.data() }));
+  const touchpoints = Array.isArray(promotion.touchpoints) ? promotion.touchpoints : [];
+  const previewState = {};
+
+  const touchpointMarkup = touchpoints.map((touchpoint, index) => {
+    const touchpointEvents = events
+      .filter((event) => event.touchpointId === touchpoint.id)
+      .sort((a, b) => (toDate(a.scheduledFor)?.getTime() || 0) - (toDate(b.scheduledFor)?.getTime() || 0));
+    const templateConfig = normalizePromotionTemplateConfig(touchpoint.templateConfig || touchpoint.template || {});
+    const variables = detectTemplateVariables(templateConfig);
+    const leadOptions = touchpointEvents.map((event) => {
+      const lead = leadsById[event.leadId] || {};
+      const contact = contactsById[lead.contactId] || {};
+      return { event, lead, contact, name: contact.name || lead.name || "Unnamed" };
+    });
+    const previewLeadId = leadOptions[0]?.event?.leadId || "";
+    previewState[touchpoint.id] = previewLeadId;
+
+    const rowsMarkup = leadOptions.length
+      ? leadOptions.map(({ event, lead, contact, name }) => {
+        const mailBody = renderTemplateWithLead(templateConfig, name).trim();
+        const mailTo = String(contact.email || "").trim();
+        const stateLabel = event.status === "skipped" ? "Skipped" : event.completed ? "Done" : "Open";
+        return `<tr><td>${escapeHtml(name)}</td><td>${escapeHtml(lead.product || "-")}</td><td>${escapeHtml(stateLabel)}</td><td><div class="button-row"><button type="button" class="secondary-btn" data-promo-open-mail="${event.id}" ${mailTo ? `data-mail-to="${escapeHtml(mailTo)}"` : "disabled"} data-mail-subject="${escapeHtml(templateConfig.subjectText || "")}" data-mail-body="${escapeHtml(mailBody)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(mailBody)}">Copy</button><button type="button" class="secondary-btn" data-promo-touchpoint-done="${event.id}" ${event.completed || event.status === "skipped" ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-promo-touchpoint-skip="${event.id}" ${event.completed || event.status === "skipped" ? "disabled" : ""}>Skip</button></div></td></tr>`;
+      }).join("")
+      : '<tr><td colspan="4">No leads in this touchpoint.</td></tr>';
+
+    const previewLead = leadOptions.find((entry) => entry.event.leadId === previewLeadId) || leadOptions[0];
+    const previewName = previewLead?.name || "";
+    const personalizedPreview = renderTemplateWithLead(templateConfig, previewName).trim();
+
+    return `<details class="panel" open><summary><strong>${escapeHtml(touchpoint.name || `Touchpoint ${index + 1}`)}</strong> · ${escapeHtml(`Touchpoint ${index + 1} of ${touchpoints.length}`)}</summary><p><strong>Due:</strong> ${formatDate(toPromotionDate(promotion.endDate) ? Timestamp.fromDate(new Date(toPromotionDate(promotion.endDate).getTime() - (Number(touchpoint.offsetDays) || 0) * 86400000)) : null)}</p><p><strong>Template Variables:</strong> ${variables.length ? escapeHtml(variables.join(", ")) : "None"}</p><label>Preview As… <select data-preview-touchpoint="${touchpoint.id}">${leadOptions.map((entry) => `<option value="${entry.event.leadId}">${escapeHtml(entry.name)}</option>`).join("")}</select></label><label class="full-width">Base Template Preview<textarea rows="5" readonly>${escapeHtml(renderTemplateWithLead(templateConfig, "").trim())}</textarea></label><label class="full-width">Preview Output<textarea rows="5" readonly data-preview-output="${touchpoint.id}">${escapeHtml(personalizedPreview)}</textarea></label><div class="table-wrap"><table><thead><tr><th>Lead</th><th>Product</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rowsMarkup}</tbody></table></div></details>`;
+  }).join("");
+
+  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(promotion.name || "Promotion")}</h2><div class="view-header-actions"><button id="promotion-back-btn" type="button" class="secondary-btn">Back</button><button id="promotion-edit-btn" type="button" class="secondary-btn">Edit</button></div></div><div class="panel detail-grid"><p><strong>End Date:</strong> ${formatDate(promotion.endDate)}</p><p><strong>Cohort Size:</strong> ${Array.isArray(promotion.leadIds) ? promotion.leadIds.length : 0}</p><p><strong>Status:</strong> ${escapeHtml(promotion.status || "active")}</p></div>${touchpointMarkup || '<p class="view-message">No touchpoints configured.</p>'}</section>`;
+
+  document.getElementById("promotion-back-btn")?.addEventListener("click", () => { window.location.hash = "#promotions"; });
+  document.getElementById("promotion-edit-btn")?.addEventListener("click", () => {
+    window.location.hash = `#promotions?edit=${encodeURIComponent(promotion.id)}`;
+  });
+
+  document.querySelectorAll("[data-preview-touchpoint]").forEach((selectEl) => {
+    selectEl.addEventListener("change", () => {
+      const touchpointId = selectEl.dataset.previewTouchpoint;
+      if (!touchpointId) return;
+      const touchpoint = touchpoints.find((entry) => entry.id === touchpointId);
+      if (!touchpoint) return;
+      const templateConfig = normalizePromotionTemplateConfig(touchpoint.templateConfig || touchpoint.template || {});
+      const leadId = selectEl.value;
+      const lead = leadsById[leadId] || {};
+      const contact = contactsById[lead.contactId] || {};
+      const outputEl = document.querySelector(`[data-preview-output="${touchpointId}"]`);
+      if (outputEl) outputEl.value = renderTemplateWithLead(templateConfig, contact.name || lead.name || "").trim();
+    });
+  });
+
+  document.querySelectorAll("[data-promo-open-mail]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", () => {
+      const to = buttonEl.dataset.mailTo || "";
+      if (!to) return;
+      const subject = encodeURIComponent(buttonEl.dataset.mailSubject || "");
+      const body = encodeURIComponent(buttonEl.dataset.mailBody || "");
+      window.open(`mailto:${encodeURIComponent(to)}?subject=${subject}&body=${body}`, "_blank");
+    });
+  });
+
+  document.querySelectorAll("[data-promo-touchpoint-done]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", async () => {
+      const eventId = buttonEl.dataset.promoTouchpointDone;
+      if (!eventId) return;
+      await markPromotionEventDone(eventId);
+      await renderPromotionDetail(promotionId);
+    });
+  });
+
+  document.querySelectorAll("[data-promo-touchpoint-skip]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", async () => {
+      const eventId = buttonEl.dataset.promoTouchpointSkip;
+      if (!eventId) return;
+      await markPromotionEventSkipped(eventId);
+      await renderPromotionDetail(promotionId);
+    });
+  });
+
+  attachClipboardHandlers(viewContainer);
+}
+
 async function renderPromotionsPage() {
   renderLoading("Loading promotions...");
   const appSettings = await getAppSettings(currentUser.uid);
@@ -2138,7 +2285,7 @@ async function renderPromotionsPage() {
     return endDate && endDate.getTime() < now.getTime();
   }).sort((a, b) => (toPromotionDate(b.endDate)?.getTime() || 0) - (toPromotionDate(a.endDate)?.getTime() || 0));
 
-  const renderCards = (items) => items.length ? items.map((promo) => `<article class="panel panel--promo"><h3>${escapeHtml(promo.name || "Untitled promo")}</h3></article>`).join("") : `<p class="view-message">No promotions.</p>`;
+  const renderCards = (items) => items.length ? items.map((promo) => `<article class="panel panel--promo feed-item-clickable" data-open-promotion="${promo.id}" tabindex="0" role="button"><h3>${escapeHtml(promo.name || "Untitled promo")}</h3></article>`).join("") : `<p class="view-message">No promotions.</p>`;
 
   viewContainer.innerHTML = `
     <section class="crm-view crm-view--promotions">
@@ -2151,6 +2298,31 @@ async function renderPromotionsPage() {
 
   document.getElementById("new-promo-btn")?.addEventListener("click", () => {
     renderPromotionCreateFlow({ snapWindowDays, pipelineStages, leads, promotions });
+  });
+
+  const route = routeFromHash();
+  const editPromotionId = route.params?.get("edit") || "";
+  if (editPromotionId) {
+    const editablePromotion = promotions.find((promo) => promo.id === editPromotionId);
+    if (editablePromotion) {
+      renderPromotionCreateFlow({ snapWindowDays, pipelineStages, leads, promotions, existingPromotion: editablePromotion });
+      return;
+    }
+  }
+
+  viewContainer.querySelectorAll("[data-open-promotion]").forEach((itemEl) => {
+    const open = () => {
+      const promoId = itemEl.dataset.openPromotion;
+      if (!promoId) return;
+      window.location.hash = `#promotion/${promoId}`;
+    };
+    itemEl.addEventListener("click", open);
+    itemEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open();
+      }
+    });
   });
 }
 
@@ -2204,17 +2376,23 @@ function syncPromotionTouchpointsFromForm(touchpoints = []) {
   });
 }
 
-function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads, promotions = [] }) {
+function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads, promotions = [], existingPromotion = null }) {
   const state = {
     page: 1,
-    name: "",
-    endDate: "",
-    presetKey: "",
-    touchpoints: [],
-    targeting: [],
-    selectedLeadIds: new Set(),
+    isEdit: Boolean(existingPromotion?.id),
+    editingPromotionId: existingPromotion?.id || null,
+    name: existingPromotion?.name || "",
+    endDate: existingPromotion ? toDateTimeLocalInputValue(existingPromotion.endDate) : "",
+    presetKey: existingPromotion?.presetKey || "",
+    touchpoints: (existingPromotion?.touchpoints || []).map((touchpoint, index) => buildPromotionTouchpointState(touchpoint, index)),
+    cohortDraftLeadIds: new Set(existingPromotion?.leadIds || []),
     searchText: "",
+    searchResults: [],
+    snapModeByLead: { ...(existingPromotion?.snapModeByLead || {}) },
+    selectionSourcesByLead: { ...(existingPromotion?.selectionSourcesByLead || {}) },
   };
+
+  if (state.isEdit) state.page = 2;
 
   const recentPresets = promotions
     .filter((promotion) => promotion?.configSnapshot)
@@ -2226,57 +2404,49 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
       configSnapshot: promotion.configSnapshot,
     }));
 
-  const syncPage1StateFromInputs = () => {
-    const nameInput = document.getElementById("promo-name");
-    const endDateInput = document.getElementById("promo-end-date");
-    if (nameInput) state.name = nameInput.value;
-    if (endDateInput) state.endDate = endDateInput.value;
+  const addLeadsToCohort = (leadList, sourceKey) => {
+    leadList.forEach((lead) => {
+      state.cohortDraftLeadIds.add(lead.id);
+      if (!state.selectionSourcesByLead[lead.id]) state.selectionSourcesByLead[lead.id] = [];
+      if (!state.selectionSourcesByLead[lead.id].includes(sourceKey)) state.selectionSourcesByLead[lead.id].push(sourceKey);
+      if (sourceKey === "all_active") state.snapModeByLead[lead.id] = "full_active";
+      if (sourceKey === "snap_active" && !state.snapModeByLead[lead.id]) state.snapModeByLead[lead.id] = "precision";
+    });
   };
 
   const draw = () => {
     if (state.page === 1) {
       viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Promo</h2></div><div class="panel form-grid"><label>Promo Name<input id="promo-name" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-date" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><p><strong>Presets (Required Selection)</strong></p><div class="promo-presets">${Object.values(PROMOTION_PRESETS).map((preset) => `<button type="button" class="secondary-btn full-width ${state.presetKey === preset.key ? "is-active" : ""}" data-preset-key="${preset.key}">${preset.label}</button>`).join("")}</div><p><strong>Recent Presets</strong></p><div class="promo-presets">${recentPresets.map((preset, index) => `<button type="button" class="secondary-btn full-width" data-recent-preset-index="${index}"><span>${escapeHtml(preset.name)}</span>${preset.createdAt ? `<small>${escapeHtml(preset.createdAt.toLocaleString())}</small>` : ""}</button>`).join("")}</div><button id="promo-continue-btn" type="button">Continue</button></div></section>`;
 
-      document.getElementById("promo-name")?.addEventListener("input", (event) => {
-        state.name = String(event.target.value || "");
-      });
-
-      document.getElementById("promo-end-date")?.addEventListener("input", (event) => {
-        state.endDate = String(event.target.value || "");
-      });
-
-      document.querySelectorAll(".promo-presets [data-preset-key]").forEach((buttonEl) => {
+      document.querySelectorAll("[data-preset-key]").forEach((buttonEl) => {
         buttonEl.addEventListener("click", () => {
-          syncPage1StateFromInputs();
+          state.name = document.getElementById("promo-name")?.value || state.name;
+          state.endDate = document.getElementById("promo-end-date")?.value || state.endDate;
           state.presetKey = buttonEl.dataset.presetKey || "custom";
           const preset = PROMOTION_PRESETS[state.presetKey] || PROMOTION_PRESETS.custom;
           state.touchpoints = preset.touchpoints.map((offset, index) => buildPromotionTouchpointState({ offsetDays: offset, order: index }, index));
-          state.targeting = [...preset.targeting];
           draw();
         });
       });
 
       document.querySelectorAll("[data-recent-preset-index]").forEach((buttonEl) => {
         buttonEl.addEventListener("click", () => {
-          syncPage1StateFromInputs();
           const presetIndex = Number.parseInt(buttonEl.dataset.recentPresetIndex || "", 10);
           const selectedPreset = recentPresets[presetIndex];
           if (!selectedPreset) return;
-          const snapshot = selectedPreset.configSnapshot;
+          const snapshot = selectedPreset.configSnapshot || {};
           state.name = snapshot.name || selectedPreset.name;
           state.endDate = toDateTimeLocalInputValue(snapshot.endDate);
           state.presetKey = snapshot.presetKey || "custom";
           state.touchpoints = (snapshot.touchpoints || []).map((touchpoint, index) => buildPromotionTouchpointState(touchpoint, index));
-          state.targeting = [...(snapshot.targeting || [])];
-          state.searchText = "";
-          state.selectedLeadIds = new Set();
           state.page = 2;
           draw();
         });
       });
 
       document.getElementById("promo-continue-btn")?.addEventListener("click", () => {
-        syncPage1StateFromInputs();
+        state.name = document.getElementById("promo-name")?.value || state.name;
+        state.endDate = document.getElementById("promo-end-date")?.value || state.endDate;
         if (!state.name.trim() || !state.endDate || !state.presetKey) return alert("Name, end date, and preset are required.");
         state.page = 2;
         draw();
@@ -2284,121 +2454,113 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
       return;
     }
 
-    const syncPage2StateFromInputs = () => {
+    const cohortLeads = leads.filter((lead) => state.cohortDraftLeadIds.has(lead.id));
+    viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${state.isEdit ? "Edit Promotion" : "Promotion Setup"}</h2></div><div class="panel form-grid"><h3>Basic Info</h3><label>Promo Name<input id="promo-name-edit" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-edit" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><h3>Touchpoints</h3><div id="touchpoint-list">${state.touchpoints.map((tp, index) => buildPromotionTouchpointMarkup(tp, index)).join("")}</div><button id="add-touchpoint-btn" class="secondary-btn" type="button">Add Touchpoint</button><h3>Add to Cohort</h3><div class="button-row"><button type="button" class="secondary-btn" data-add-group="snap_active">Snap Active Leads</button><button type="button" class="secondary-btn" data-add-group="drop_out">Drop Off Leads</button><button type="button" class="secondary-btn" data-add-group="all_active">All Active Leads</button><button type="button" class="secondary-btn" id="clear-cohort-btn">Clear Cohort</button></div><label>Custom Search (additive)<input id="promo-search" value="${escapeHtml(state.searchText)}" placeholder="Name or product" /></label><div id="promo-search-results" class="lead-list"></div><h3>Cohort Preview (source of truth)</h3><div id="promo-cohort-preview" class="lead-list"></div><button id="create-promo-btn" type="button">${state.isEdit ? "Save Promotion" : "Create Promo"}</button></div></section>`;
+
+    const syncFromForm = () => {
       state.name = document.getElementById("promo-name-edit")?.value || state.name;
       state.endDate = document.getElementById("promo-end-edit")?.value || state.endDate;
       state.touchpoints = syncPromotionTouchpointsFromForm(state.touchpoints);
     };
 
-    const getTargetLeads = () => {
-      const promotionConfig = { name: state.name, endDate: state.endDate, touchpoints: state.touchpoints, targeting: state.targeting };
-      return computeTargetLeads({ leads, promotion: promotionConfig, snapWindowDays, searchText: state.searchText, pipelineStages });
-    };
-
-    const targetLeads = getTargetLeads();
-    if (!state.selectedLeadIds.size) targetLeads.forEach((lead) => state.selectedLeadIds.add(lead.id));
-
-    viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>Promotion Setup</h2></div><div class="panel form-grid"><h3>Basic Info</h3><label>Promo Name<input id="promo-name-edit" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-edit" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><h3>Touchpoints</h3><div id="touchpoint-list">${state.touchpoints.map((tp, index) => buildPromotionTouchpointMarkup(tp, index)).join("")}</div><button id="add-touchpoint-btn" class="secondary-btn" type="button">Add Touchpoint</button><h3>Targeting Strategy</h3><div class="promo-targeting">${TARGETING_OPTIONS.map((option) => `<button type="button" class="secondary-btn ${state.targeting.includes(option.id) ? "is-active" : ""}" data-targeting-id="${option.id}">${option.label}</button>`).join("")}</div><label>Custom Search<input id="promo-search" value="${escapeHtml(state.searchText)}" placeholder="Name or product" /></label><label><input type="checkbox" id="promo-select-all" /> Select All</label><div id="promo-lead-list" class="lead-list"></div><button id="create-promo-btn" type="button">Create Promo</button></div></section>`;
-
-    const leadListEl = document.getElementById("promo-lead-list");
-    const selectAllEl = document.getElementById("promo-select-all");
-
-    const renderLeadList = () => {
-      const visibleTargetLeads = getTargetLeads();
-      if (!leadListEl || !selectAllEl) return;
-
-      if (!state.selectedLeadIds.size) {
-        visibleTargetLeads.forEach((lead) => state.selectedLeadIds.add(lead.id));
+    const renderSearchResults = () => {
+      const promotionConfig = { name: state.name, endDate: state.endDate, touchpoints: state.touchpoints, targeting: ["custom_search"] };
+      state.searchResults = computeTargetLeads({ leads, promotion: promotionConfig, snapWindowDays, searchText: state.searchText, pipelineStages });
+      const listEl = document.getElementById("promo-search-results");
+      if (!listEl) return;
+      if (!state.searchText.trim()) {
+        listEl.innerHTML = '<article class="panel panel--lead"><p>Type to search active and dropped-off leads.</p></article>';
+        return;
       }
-
-      if (!visibleTargetLeads.length) {
-        const hasBaseTargeting = state.targeting.some((entry) => ["snap_active", "all_active", "drop_out"].includes(entry));
-        const dropOutOnly = state.targeting.length === 1 && state.targeting.includes("drop_out");
-        const customOnly = !hasBaseTargeting && state.targeting.includes("custom_search");
-        const emptyMessage = customOnly
-          ? "No leads match your custom search. Custom Search scans active and dropped-off leads."
-          : dropOutOnly
-            ? "No dropped-off leads are currently available."
-            : hasBaseTargeting
-              ? "No leads match the current targeting and search filters."
-              : "Select a targeting option, or enable Custom Search to search across active and dropped-off leads.";
-        leadListEl.innerHTML = `<article class="panel panel--lead"><p>${emptyMessage}</p></article>`;
-      } else {
-        leadListEl.innerHTML = visibleTargetLeads
-          .map(
-            (lead) => `<article class="panel panel--lead"><label><input type="checkbox" data-target-lead-id="${lead.id}" ${state.selectedLeadIds.has(lead.id) ? "checked" : ""} /> ${escapeHtml(lead.name || "Unnamed")}</label><p>${escapeHtml(lead.product || "No product")}</p><small>${qualifiesForSnap(lead, state.touchpoints, new Date(state.endDate), snapWindowDays, pipelineStages) ? "Snap Active" : isLeadDropOutState(lead) ? "Drop-Out" : "Active"}</small></article>`,
-          )
-          .join("");
+      if (!state.searchResults.length) {
+        listEl.innerHTML = '<article class="panel panel--lead"><p>No matching leads.</p></article>';
+        return;
       }
-
-      const selectedCount = visibleTargetLeads.filter((lead) => state.selectedLeadIds.has(lead.id)).length;
-      selectAllEl.checked = visibleTargetLeads.length > 0 && selectedCount === visibleTargetLeads.length;
-      selectAllEl.indeterminate = selectedCount > 0 && selectedCount < visibleTargetLeads.length;
-
-      leadListEl.querySelectorAll("[data-target-lead-id]").forEach((inputEl) => {
-        inputEl.addEventListener("change", () => {
-          const leadId = inputEl.dataset.targetLeadId;
-          if (!leadId) return;
-          if (inputEl.checked) state.selectedLeadIds.add(leadId);
-          else state.selectedLeadIds.delete(leadId);
-          renderLeadList();
+      listEl.innerHTML = state.searchResults.map((lead) => `<article class="panel panel--lead"><p><strong>${escapeHtml(lead.name || "Unnamed")}</strong></p><p>${escapeHtml(lead.product || "No product")}</p><button type="button" class="secondary-btn" data-add-search-lead="${lead.id}">Add to cohort</button></article>`).join("");
+      listEl.querySelectorAll("[data-add-search-lead]").forEach((buttonEl) => {
+        buttonEl.addEventListener("click", () => {
+          const lead = leads.find((entry) => entry.id === buttonEl.dataset.addSearchLead);
+          if (!lead) return;
+          addLeadsToCohort([lead], "custom_search");
+          renderCohortPreview();
         });
       });
     };
 
-    renderLeadList();
-
-    document.getElementById("add-touchpoint-btn")?.addEventListener("click", () => {
-      syncPage2StateFromInputs();
-      state.touchpoints.push(buildPromotionTouchpointState({ order: state.touchpoints.length, offsetDays: 0 }, state.touchpoints.length));
-      draw();
-    });
-
-    document.getElementById("promo-name-edit")?.addEventListener("input", (event) => {
-      state.name = String(event.target.value || "");
-    });
-
-    document.getElementById("promo-end-edit")?.addEventListener("input", (event) => {
-      state.endDate = String(event.target.value || "");
-      renderLeadList();
-    });
-
-    document.querySelectorAll("[data-targeting-id]").forEach((buttonEl) => {
-      buttonEl.addEventListener("click", () => {
-        syncPage2StateFromInputs();
-        const id = buttonEl.dataset.targetingId;
-        if (!id) return;
-        if (state.targeting.includes(id)) state.targeting = state.targeting.filter((entry) => entry !== id);
-        else state.targeting.push(id);
-        buttonEl.classList.toggle("is-active", state.targeting.includes(id));
-        renderLeadList();
+    const renderCohortPreview = () => {
+      const previewEl = document.getElementById("promo-cohort-preview");
+      if (!previewEl) return;
+      const rows = leads.filter((lead) => state.cohortDraftLeadIds.has(lead.id));
+      if (!rows.length) {
+        previewEl.innerHTML = '<article class="panel panel--lead"><p>No leads selected yet.</p></article>';
+        return;
+      }
+      previewEl.innerHTML = rows.map((lead) => `<article class="panel panel--lead"><p><strong>${escapeHtml(lead.name || "Unnamed")}</strong></p><p>${escapeHtml(lead.product || "No product")}</p><small>${escapeHtml((state.selectionSourcesByLead[lead.id] || []).join(", ") || "manual")}</small><button type="button" class="secondary-btn" data-remove-cohort-lead="${lead.id}">Remove</button></article>`).join("");
+      previewEl.querySelectorAll("[data-remove-cohort-lead]").forEach((buttonEl) => {
+        buttonEl.addEventListener("click", () => {
+          const leadId = buttonEl.dataset.removeCohortLead;
+          if (!leadId) return;
+          state.cohortDraftLeadIds.delete(leadId);
+          delete state.selectionSourcesByLead[leadId];
+          delete state.snapModeByLead[leadId];
+          renderCohortPreview();
+        });
       });
+    };
+
+    document.querySelectorAll("[data-add-group]").forEach((buttonEl) => {
+      buttonEl.addEventListener("click", () => {
+        syncFromForm();
+        const group = buttonEl.dataset.addGroup;
+        const endDate = toPromotionDate(state.endDate);
+        if (!endDate) return;
+        let additions = [];
+        if (group === "all_active") additions = leads.filter((lead) => isLeadActive(lead));
+        if (group === "drop_out") additions = leads.filter((lead) => isLeadDropOutState(lead));
+        if (group === "snap_active") additions = leads.filter((lead) => qualifiesForSnap(lead, state.touchpoints, endDate, snapWindowDays, pipelineStages));
+        addLeadsToCohort(additions, group || "manual");
+        renderCohortPreview();
+      });
+    });
+
+    document.getElementById("clear-cohort-btn")?.addEventListener("click", () => {
+      state.cohortDraftLeadIds = new Set();
+      state.selectionSourcesByLead = {};
+      state.snapModeByLead = {};
+      renderCohortPreview();
     });
 
     document.getElementById("promo-search")?.addEventListener("input", (event) => {
       state.searchText = String(event.target.value || "");
-      renderLeadList();
+      renderSearchResults();
     });
 
-    document.getElementById("promo-select-all")?.addEventListener("change", (event) => {
-      const visibleTargetLeads = getTargetLeads();
-      const selected = event.target.checked;
-      visibleTargetLeads.forEach((lead) => {
-        if (selected) state.selectedLeadIds.add(lead.id);
-        else state.selectedLeadIds.delete(lead.id);
-      });
-      renderLeadList();
+    document.getElementById("add-touchpoint-btn")?.addEventListener("click", () => {
+      syncFromForm();
+      state.touchpoints.push(buildPromotionTouchpointState({ order: state.touchpoints.length, offsetDays: 0 }, state.touchpoints.length));
+      draw();
     });
 
     document.getElementById("create-promo-btn")?.addEventListener("click", async () => {
-      state.name = document.getElementById("promo-name-edit")?.value || state.name;
-      state.endDate = document.getElementById("promo-end-edit")?.value || state.endDate;
-      state.touchpoints = syncPromotionTouchpointsFromForm(state.touchpoints);
-
-      const selectedLeads = leads.filter((lead) => state.selectedLeadIds.has(lead.id));
+      syncFromForm();
+      const selectedLeads = leads.filter((lead) => state.cohortDraftLeadIds.has(lead.id));
       if (!selectedLeads.length) return alert("Please select at least one lead.");
 
       try {
+        if (state.isEdit && state.editingPromotionId) {
+          await updateDoc(doc(db, "users", currentUser.uid, "promotions", state.editingPromotionId), {
+            name: state.name,
+            endDate: Timestamp.fromDate(new Date(state.endDate)),
+            touchpoints: buildPromotionTouchpoints(state.touchpoints),
+            leadIds: selectedLeads.map((lead) => lead.id),
+            selectionSourcesByLead: state.selectionSourcesByLead,
+            snapModeByLead: state.snapModeByLead,
+            updatedAt: serverTimestamp(),
+          });
+          await renderPromotionDetail(state.editingPromotionId);
+          return;
+        }
+
         await createPromotion({
           db,
           userId: currentUser.uid,
@@ -2406,21 +2568,26 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
             name: state.name,
             endDate: state.endDate,
             touchpoints: buildPromotionTouchpoints(state.touchpoints),
-            targeting: state.targeting,
+            targeting: Object.keys(state.selectionSourcesByLead),
             presetKey: state.presetKey,
           },
           selectedLeads,
           snapWindowDays,
           pipelineStages,
           presetLabel: PROMOTION_PRESETS[state.presetKey]?.label || "Custom",
+          snapModeByLead: state.snapModeByLead,
+          selectionSourcesByLead: state.selectionSourcesByLead,
         });
 
         await renderPromotionsPage();
       } catch (error) {
-        console.error("Failed to create promotion", error);
+        console.error("Failed to save promotion", error);
         alert(`Could not save promotion: ${error?.message || "Unknown error"}`);
       }
     });
+
+    renderSearchResults();
+    renderCohortPreview();
   };
 
   draw();
@@ -2743,6 +2910,11 @@ async function renderCurrentRoute() {
 
     if (route.page === "promotion-event-detail" && route.promotionEventId) {
       await renderPromotionEventDetail(route.promotionEventId);
+      return;
+    }
+
+    if (route.page === "promotion-detail" && route.promotionId) {
+      await renderPromotionDetail(route.promotionId);
       return;
     }
 
