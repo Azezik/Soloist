@@ -581,7 +581,7 @@ function getRenderableItems(state, options = {}) {
   }
 
   const projectedItems = includeProjected
-    ? buildProjectedLeadItems(state.leads, state.pipelineSettings, range.start, range.end)
+    ? buildProjectedLeadItems(state.leads, state.pipelineSettings, range.start, range.end, state.promotionEvents)
     : [];
   const items = [...state.items, ...projectedItems].sort((a, b) => a.date.getTime() - b.date.getTime());
   state.projectionCache.set(cacheKey, items);
@@ -600,6 +600,7 @@ export async function renderCalendarScreen({ viewContainer, currentUserId, initi
     focusedDate: startOfDay(initialDate || new Date()),
     view: initialView || VIEW_MONTH,
     items: normalizeCalendarItems(tasks, leads, promotionEvents),
+    promotionEvents,
     leads,
     pipelineSettings,
     dragState: null,

@@ -96,12 +96,25 @@ export function normalizeCalendarItems(tasks, leads, promotionEvents = []) {
   return [...taskItems, ...leadItems, ...promotionItems].sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
-export function buildProjectedLeadItems(leads, pipelineSettings, rangeStart, rangeEnd) {
+function buildPromotionReplacementIndex(promotionEvents = []) {
+  return promotionEvents.reduce((acc, event) => {
+    if (!event?.leadId || !event?.snappedStageId || event.completed || event.archived || event.deleted === true) {
+      return acc;
+    }
+
+    const key = `${event.leadId}:${event.snappedStageId}`;
+    acc.add(key);
+    return acc;
+  }, new Set());
+}
+
+export function buildProjectedLeadItems(leads, pipelineSettings, rangeStart, rangeEnd, promotionEvents = []) {
   if (!Array.isArray(leads) || !Array.isArray(pipelineSettings?.stages)) return [];
   if (!(rangeStart instanceof Date) || Number.isNaN(rangeStart.getTime())) return [];
   if (!(rangeEnd instanceof Date) || Number.isNaN(rangeEnd.getTime())) return [];
 
   const stages = pipelineSettings.stages;
+  const replacedStageKeys = buildPromotionReplacementIndex(promotionEvents);
 
   return leads.flatMap((lead) => {
     const anchorDate = toDate(lead.nextActionAt);
@@ -120,6 +133,7 @@ export function buildProjectedLeadItems(leads, pipelineSettings, rangeStart, ran
         projectedDate.setDate(projectedDate.getDate() + deltaDays);
 
         if (projectedDate < rangeStart || projectedDate >= rangeEnd) return null;
+        if (replacedStageKeys.has(`${lead.id}:${stage.id}`)) return null;
 
         return {
           id: `lead:${lead.id}:projStage:${stage.id}`,

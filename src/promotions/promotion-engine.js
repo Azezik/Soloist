@@ -1,5 +1,5 @@
-import { addDoc, collection, doc, serverTimestamp, setDoc, Timestamp, updateDoc } from "../data/firestore-service.js";
-import { computeTouchpointDate, qualifiesForSnap } from "./snap-engine.js";
+import { addDoc, collection, doc, serverTimestamp, setDoc, Timestamp } from "../data/firestore-service.js";
+import { computeTouchpointDate, findSnapMatch } from "./snap-engine.js";
 import { toPromotionDate } from "./presets.js";
 
 function clampString(value, maxLen) {
@@ -13,7 +13,7 @@ function permissionError(step, error) {
   return new Error(`Promotion save failed at ${step}${code}: ${message}`);
 }
 
-function buildPromotionEvents(promotionId, lead, touchpoints, endDate) {
+function buildPromotionEvents(promotionId, lead, touchpoints, endDate, snappedStageId = null) {
   return touchpoints.map((touchpoint) => {
     const scheduledDate = computeTouchpointDate(endDate, touchpoint.offsetDays);
     const scheduledFor = Timestamp.fromDate(scheduledDate);
@@ -44,6 +44,7 @@ function buildPromotionEvents(promotionId, lead, touchpoints, endDate) {
 
     if (lead.contactId) event.contactId = lead.contactId;
     if (lead.stageId) event.stageId = lead.stageId;
+    if (snappedStageId) event.snappedStageId = snappedStageId;
 
     return event;
   });
@@ -73,30 +74,22 @@ async function createPromotion({ db, userId, promotion, selectedLeads, snapWindo
   }
 
   for (const lead of selectedLeads) {
-    const snapped = qualifiesForSnap(lead, promotion.touchpoints, endDate, snapWindowDays, pipelineStages);
-    if (snapped) {
+    const snapMatch = findSnapMatch(lead, promotion.touchpoints, endDate, snapWindowDays, pipelineStages);
+    if (snapMatch) {
       const snapshotPayload = {
         leadId: lead.id,
-        originalScheduledDate: lead.nextActionAt || null,
+        originalScheduledDate: snapMatch.candidateDay ? Timestamp.fromDate(new Date(snapMatch.candidateDay)) : lead.nextActionAt || null,
         snappedAt: serverTimestamp(),
       };
-      if (lead.stageId) snapshotPayload.originalStageId = lead.stageId;
+      if (snapMatch.stageId) snapshotPayload.originalStageId = snapMatch.stageId;
       try {
         await setDoc(doc(db, "users", userId, "promotions", promotionRef.id, "snapshots", lead.id), snapshotPayload);
       } catch (error) {
         throw permissionError(`promotion snapshot create for lead ${lead.id}`, error);
       }
-      try {
-        await updateDoc(doc(db, "users", userId, "leads", lead.id), {
-          nextActionAt: null,
-          updatedAt: serverTimestamp(),
-        });
-      } catch (error) {
-        throw permissionError(`lead update after snapshot for lead ${lead.id}`, error);
-      }
     }
 
-    const events = buildPromotionEvents(promotionRef.id, lead, promotion.touchpoints, endDate);
+    const events = buildPromotionEvents(promotionRef.id, lead, promotion.touchpoints, endDate, snapMatch?.stageId || null);
     for (const event of events) {
       try {
         await addDoc(collection(db, "users", userId, "events"), event);

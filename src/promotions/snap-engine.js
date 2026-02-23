@@ -46,24 +46,70 @@ function getLeadSnapCandidateDays(lead, pipelineStages = []) {
   return projectedDays.length ? projectedDays : [scheduledDay];
 }
 
-function qualifiesForSnap(lead, touchpoints, endDate, snapWindowDays = 2, pipelineStages = []) {
-  if (!isLeadActive(lead)) return false;
-  const candidateDays = getLeadSnapCandidateDays(lead, pipelineStages);
-  if (!candidateDays.length) return false;
+function getLeadSnapCandidates(lead, pipelineStages = []) {
+  const scheduledAt = toPromotionDate(lead?.nextActionAt);
+  if (!scheduledAt) return [];
+
+  const scheduledDay = Date.UTC(scheduledAt.getFullYear(), scheduledAt.getMonth(), scheduledAt.getDate());
+
+  if (!Array.isArray(pipelineStages) || !pipelineStages.length) {
+    return [{ day: scheduledDay, stageId: lead?.stageId || null }];
+  }
+
+  const stageIndex = pipelineStages.findIndex((stage) => stage.id === lead?.stageId);
+  if (stageIndex < 0) {
+    return [{ day: scheduledDay, stageId: lead?.stageId || null }];
+  }
+
+  const anchorOffsetDays = Number(pipelineStages[stageIndex]?.offsetDays) || 0;
+  const candidates = pipelineStages
+    .slice(stageIndex)
+    .map((stage) => {
+      const stageOffsetDays = Number(stage?.offsetDays);
+      if (Number.isNaN(stageOffsetDays)) return null;
+      const deltaDays = Math.max(0, stageOffsetDays - anchorOffsetDays);
+      return {
+        day: scheduledDay + deltaDays * 24 * 60 * 60 * 1000,
+        stageId: stage?.id || null,
+      };
+    })
+    .filter((entry) => Number.isFinite(entry?.day));
+
+  return candidates.length ? candidates : [{ day: scheduledDay, stageId: lead?.stageId || null }];
+}
+
+function findSnapMatch(lead, touchpoints, endDate, snapWindowDays = 2, pipelineStages = []) {
+  if (!isLeadActive(lead)) return null;
+  const candidateEntries = getLeadSnapCandidates(lead, pipelineStages);
+  if (!candidateEntries.length) return null;
   const touchpointList = Array.isArray(touchpoints) ? touchpoints : [];
-  if (!touchpointList.length) return false;
+  if (!touchpointList.length) return null;
 
   const dayMs = 24 * 60 * 60 * 1000;
   const windowDays = Math.max(0, Number(snapWindowDays) || 0);
 
-  return touchpointList.some((touchpoint) => {
+  for (const touchpoint of touchpointList) {
     const touchpointDate = computeTouchpointDate(endDate, touchpoint.offsetDays);
     const touchpointDay = Date.UTC(touchpointDate.getFullYear(), touchpointDate.getMonth(), touchpointDate.getDate());
-    return candidateDays.some((candidateDay) => {
-      const dayDiff = Math.abs(candidateDay - touchpointDay) / dayMs;
-      return dayDiff <= windowDays;
-    });
-  });
+
+    for (const candidate of candidateEntries) {
+      const dayDiff = Math.abs(candidate.day - touchpointDay) / dayMs;
+      if (dayDiff <= windowDays) {
+        return {
+          stageId: candidate.stageId,
+          candidateDay: candidate.day,
+          touchpointId: touchpoint.id,
+          touchpointDay,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function qualifiesForSnap(lead, touchpoints, endDate, snapWindowDays = 2, pipelineStages = []) {
+  return Boolean(findSnapMatch(lead, touchpoints, endDate, snapWindowDays, pipelineStages));
 }
 
 function computeTargetLeads({ leads, promotion, snapWindowDays = 2, searchText = "", pipelineStages = [] }) {
@@ -99,4 +145,4 @@ function computeTargetLeads({ leads, promotion, snapWindowDays = 2, searchText =
   });
 }
 
-export { computeTouchpointDate, isLeadActive, isLeadDropOut, qualifiesForSnap, computeTargetLeads, getLeadSnapCandidateDays };
+export { computeTouchpointDate, isLeadActive, isLeadDropOut, qualifiesForSnap, computeTargetLeads, getLeadSnapCandidateDays, findSnapMatch };
