@@ -1,162 +1,86 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isSignedInOwner(userId) {
-      return request.auth != null && request.auth.uid == userId;
+    function isSignedIn() {
+      return request.auth != null;
     }
 
-    function noPrivilegeFields() {
-      return !('ownerUid' in request.resource.data)
-        && !('tenantId' in request.resource.data)
-        && !('role' in request.resource.data)
-        && !('isAdmin' in request.resource.data);
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
     }
 
-    function validString(field, maxLen) {
-      return !(field in request.resource.data)
-        || (request.resource.data[field] is string && request.resource.data[field].size() <= maxLen);
+    // Reserve a stable metadata envelope for server-managed data.
+    // CRM docs remain flexible, but clients cannot write the reserved envelope.
+    function hasNoReservedSystemEnvelope() {
+      return !('sys' in request.resource.data);
     }
 
-    function validOptionalString(field, maxLen) {
-      return !(field in request.resource.data)
-        || request.resource.data[field] == null
-        || (request.resource.data[field] is string && request.resource.data[field].size() <= maxLen);
-    }
-
-    function createdAtImmutable() {
-      return !('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt;
+    function ownerCrud(userId) {
+      return isOwner(userId) && hasNoReservedSystemEnvelope();
     }
 
     match /users/{userId} {
-      allow read: if isSignedInOwner(userId);
+      // Keep root user document immutable from clients.
+      allow read: if isOwner(userId);
       allow write: if false;
 
+      // Canonical entitlement document (single source of truth, server-managed).
+      match /entitlements/main {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      // Deny every other entitlement document to avoid ambiguity/drift.
+      match /entitlements/{entitlementId} {
+        allow read, write: if false;
+      }
+
+      // Reserve additional server-managed namespaces for future tier/billing metadata.
+      match /billing/{docId} {
+        allow read, write: if false;
+      }
+
+      match /system/{docId} {
+        allow read, write: if false;
+      }
+
+      // Tier 1 CRM namespace (current UX): full CRUD inside owner's account scope.
       match /contacts/{contactId} {
-        allow read: if isSignedInOwner(userId);
-        allow create, update: if isSignedInOwner(userId)
-          && noPrivilegeFields()
-          && createdAtImmutable()
-          && validString('name', 120)
-          && validString('email', 254)
-          && validString('phone', 40)
-          && validString('status', 40);
-        allow delete: if isSignedInOwner(userId);
+        allow read, create, update, delete: if ownerCrud(userId);
       }
 
       match /leads/{leadId} {
-        allow read: if isSignedInOwner(userId);
-        allow create, update: if isSignedInOwner(userId)
-          && noPrivilegeFields()
-          && createdAtImmutable()
-          && validString('type', 40)
-          && validString('contactId', 128)
-          && validString('status', 40)
-          && validString('title', 200)
-          && validString('summary', 5000)
-          && validString('stageId', 80)
-          && validString('stageStatus', 40)
-          && (!('archived' in request.resource.data) || request.resource.data.archived is bool);
-        allow delete: if isSignedInOwner(userId);
+        allow read, create, update, delete: if ownerCrud(userId);
       }
 
       match /tasks/{taskId} {
-        allow read: if isSignedInOwner(userId);
-        allow create, update: if isSignedInOwner(userId)
-          && noPrivilegeFields()
-          && createdAtImmutable()
-          && validString('type', 40)
-          && validString('contactId', 128)
-          && validString('status', 40)
-          && validString('title', 200)
-          && validString('notes', 5000)
-          && validString('summary', 5000)
-          && (!('completed' in request.resource.data) || request.resource.data.completed is bool)
-          && (!('archived' in request.resource.data) || request.resource.data.archived is bool);
-        allow delete: if isSignedInOwner(userId);
+        allow read, create, update, delete: if ownerCrud(userId);
       }
 
       match /notes/{noteId} {
-        allow read: if isSignedInOwner(userId);
-        allow create, update: if isSignedInOwner(userId)
-          && noPrivilegeFields()
-          && createdAtImmutable()
-          && validString('contactId', 128)
-          && validString('parentType', 40)
-          && validString('parentId', 128)
-          && ('noteText' in request.resource.data)
-          && request.resource.data.noteText is string
-          && request.resource.data.noteText.size() > 0
-          && request.resource.data.noteText.size() <= 5000;
-        allow delete: if isSignedInOwner(userId);
-      }
-
-
-      match /promotions/{promotionId} {
-        allow read: if isSignedInOwner(userId);
-        allow create: if isSignedInOwner(userId)
-          && noPrivilegeFields()
-          && validString('name', 500)
-          && validString('presetKey', 80)
-          && validString('presetLabel', 120)
-          && validString('status', 40);
-        allow update: if isSignedInOwner(userId)
-          && noPrivilegeFields()
-          && createdAtImmutable()
-          && validString('name', 500)
-          && validString('presetKey', 80)
-          && validString('presetLabel', 120)
-          && validString('status', 40);
-        allow delete: if isSignedInOwner(userId);
-
-        match /snapshots/{snapshotId} {
-          allow read: if isSignedInOwner(userId);
-          allow create: if isSignedInOwner(userId)
-            && noPrivilegeFields()
-            && validString('leadId', 128)
-            && validOptionalString('originalStageId', 80);
-          allow update: if isSignedInOwner(userId)
-            && noPrivilegeFields()
-            && createdAtImmutable()
-            && validString('leadId', 128)
-            && validOptionalString('originalStageId', 80);
-          allow delete: if isSignedInOwner(userId);
-        }
+        allow read, create, update, delete: if ownerCrud(userId);
       }
 
       match /promotionEvents/{promotionEventId} {
-        allow read: if isSignedInOwner(userId);
-        allow create: if isSignedInOwner(userId)
-          && noPrivilegeFields()
-          && validString('promotionId', 128)
-          && validString('leadId', 128)
-          && validOptionalString('contactId', 128)
-          && validOptionalString('stageId', 80)
-          && validString('touchpointId', 128)
-          && validString('status', 40)
-          && validString('type', 40)
-          && validString('name', 500)
-          && (!('completed' in request.resource.data) || request.resource.data.completed is bool)
-          && (!('archived' in request.resource.data) || request.resource.data.archived is bool);
-        allow update: if isSignedInOwner(userId)
-          && noPrivilegeFields()
-          && createdAtImmutable()
-          && validString('promotionId', 128)
-          && validString('leadId', 128)
-          && validOptionalString('contactId', 128)
-          && validOptionalString('stageId', 80)
-          && validString('touchpointId', 128)
-          && validString('status', 40)
-          && validString('type', 40)
-          && validString('name', 500)
-          && (!('completed' in request.resource.data) || request.resource.data.completed is bool)
-          && (!('archived' in request.resource.data) || request.resource.data.archived is bool);
-        allow delete: if isSignedInOwner(userId);
+        allow read, create, update, delete: if ownerCrud(userId);
       }
 
+      match /events/{eventId} {
+        allow read, create, update, delete: if ownerCrud(userId);
+      }
+
+      match /promotions/{promotionId} {
+        allow read, create, update, delete: if ownerCrud(userId);
+
+        match /snapshots/{snapshotId} {
+          allow read, create, update, delete: if ownerCrud(userId);
+        }
+      }
+
+      // Settings are intentionally multi-document, but scoped to known keys to prevent sprawl.
       match /settings/{settingId} {
-        allow read: if isSignedInOwner(userId);
-        allow create, update: if isSignedInOwner(userId)
-          && noPrivilegeFields();
+        allow read, create, update: if ownerCrud(userId)
+          && settingId in ['pipeline', 'nightlyRollover', 'main'];
         allow delete: if false;
       }
     }

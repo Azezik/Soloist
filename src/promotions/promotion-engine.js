@@ -99,7 +99,7 @@ async function createPromotion({ db, userId, promotion, selectedLeads, snapWindo
     const events = buildPromotionEvents(promotionRef.id, lead, promotion.touchpoints, endDate);
     for (const event of events) {
       try {
-        await addDoc(collection(db, "users", userId, "promotionEvents"), event);
+        await addDoc(collection(db, "users", userId, "events"), event);
       } catch (error) {
         throw permissionError(`promotion event create for lead ${lead.id}`, error);
       }
