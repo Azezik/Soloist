@@ -20,26 +20,53 @@ function isLeadDropOut(lead = {}) {
   return state === "drop_out";
 }
 
-function qualifiesForSnap(lead, touchpoints, endDate, snapWindowDays = 2) {
+function getLeadSnapCandidateDays(lead, pipelineStages = []) {
+  const scheduledAt = toPromotionDate(lead?.nextActionAt);
+  if (!scheduledAt) return [];
+
+  const scheduledDay = Date.UTC(scheduledAt.getFullYear(), scheduledAt.getMonth(), scheduledAt.getDate());
+
+  if (!Array.isArray(pipelineStages) || !pipelineStages.length) return [scheduledDay];
+
+  const stageIndex = pipelineStages.findIndex((stage) => stage.id === lead?.stageId);
+  if (stageIndex < 0) return [scheduledDay];
+
+  const anchorOffsetDays = Number(pipelineStages[stageIndex]?.offsetDays) || 0;
+
+  const projectedDays = pipelineStages
+    .slice(stageIndex)
+    .map((stage) => {
+      const stageOffsetDays = Number(stage?.offsetDays);
+      if (Number.isNaN(stageOffsetDays)) return null;
+      const deltaDays = Math.max(0, stageOffsetDays - anchorOffsetDays);
+      return scheduledDay + deltaDays * 24 * 60 * 60 * 1000;
+    })
+    .filter((day) => Number.isFinite(day));
+
+  return projectedDays.length ? projectedDays : [scheduledDay];
+}
+
+function qualifiesForSnap(lead, touchpoints, endDate, snapWindowDays = 2, pipelineStages = []) {
   if (!isLeadActive(lead)) return false;
-  const scheduledAt = toPromotionDate(lead.nextActionAt);
-  if (!scheduledAt) return false;
+  const candidateDays = getLeadSnapCandidateDays(lead, pipelineStages);
+  if (!candidateDays.length) return false;
   const touchpointList = Array.isArray(touchpoints) ? touchpoints : [];
   if (!touchpointList.length) return false;
 
   const dayMs = 24 * 60 * 60 * 1000;
   const windowDays = Math.max(0, Number(snapWindowDays) || 0);
-  const scheduledDay = Date.UTC(scheduledAt.getFullYear(), scheduledAt.getMonth(), scheduledAt.getDate());
 
   return touchpointList.some((touchpoint) => {
     const touchpointDate = computeTouchpointDate(endDate, touchpoint.offsetDays);
     const touchpointDay = Date.UTC(touchpointDate.getFullYear(), touchpointDate.getMonth(), touchpointDate.getDate());
-    const dayDiff = Math.abs(scheduledDay - touchpointDay) / dayMs;
-    return dayDiff <= windowDays;
+    return candidateDays.some((candidateDay) => {
+      const dayDiff = Math.abs(candidateDay - touchpointDay) / dayMs;
+      return dayDiff <= windowDays;
+    });
   });
 }
 
-function computeTargetLeads({ leads, promotion, snapWindowDays = 2, searchText = "" }) {
+function computeTargetLeads({ leads, promotion, snapWindowDays = 2, searchText = "", pipelineStages = [] }) {
   const endDate = toPromotionDate(promotion.endDate);
   if (!endDate) return [];
   const targeting = Array.isArray(promotion.targeting) ? promotion.targeting : [];
@@ -48,7 +75,7 @@ function computeTargetLeads({ leads, promotion, snapWindowDays = 2, searchText =
   return leads.filter((lead) => {
     const active = isLeadActive(lead);
     const dropOut = isLeadDropOut(lead);
-    const snapActive = qualifiesForSnap(lead, promotion.touchpoints || [], endDate, snapWindowDays);
+    const snapActive = qualifiesForSnap(lead, promotion.touchpoints || [], endDate, snapWindowDays, pipelineStages);
     const eligibleForSearch = active || dropOut;
 
     const selectedBaseFilters = BASE_TARGETING_KEYS.filter((key) => targeting.includes(key));
@@ -72,4 +99,4 @@ function computeTargetLeads({ leads, promotion, snapWindowDays = 2, searchText =
   });
 }
 
-export { computeTouchpointDate, isLeadActive, isLeadDropOut, qualifiesForSnap, computeTargetLeads };
+export { computeTouchpointDate, isLeadActive, isLeadDropOut, qualifiesForSnap, computeTargetLeads, getLeadSnapCandidateDays };
