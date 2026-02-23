@@ -2350,23 +2350,28 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
       const selectedLeads = leads.filter((lead) => state.selectedLeadIds.has(lead.id));
       if (!selectedLeads.length) return alert("Please select at least one lead.");
 
-      await createPromotion({
-        db,
-        userId: currentUser.uid,
-        promotion: {
-          name: state.name,
-          endDate: state.endDate,
-          touchpoints: buildPromotionTouchpoints(state.touchpoints),
-          targeting: state.targeting,
-          presetKey: state.presetKey,
-        },
-        selectedLeads,
-        snapWindowDays,
-        pipelineStages,
-        presetLabel: PROMOTION_PRESETS[state.presetKey]?.label || "Custom",
-      });
+      try {
+        await createPromotion({
+          db,
+          userId: currentUser.uid,
+          promotion: {
+            name: state.name,
+            endDate: state.endDate,
+            touchpoints: buildPromotionTouchpoints(state.touchpoints),
+            targeting: state.targeting,
+            presetKey: state.presetKey,
+          },
+          selectedLeads,
+          snapWindowDays,
+          pipelineStages,
+          presetLabel: PROMOTION_PRESETS[state.presetKey]?.label || "Custom",
+        });
 
-      await renderPromotionsPage();
+        await renderPromotionsPage();
+      } catch (error) {
+        console.error("Failed to create promotion", error);
+        alert(`Could not save promotion: ${error?.message || "Unknown error"}`);
+      }
     });
   };
 

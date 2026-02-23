@@ -96,7 +96,7 @@ service cloud.firestore {
         allow create, update: if isSignedInOwner(userId)
           && noPrivilegeFields()
           && createdAtImmutable()
-          && validString('name', 200)
+          && validString('name', 500)
           && validString('presetKey', 80)
           && validString('presetLabel', 120)
           && validString('status', 40);
@@ -125,7 +125,7 @@ service cloud.firestore {
           && validString('touchpointId', 128)
           && validString('status', 40)
           && validString('type', 40)
-          && validString('name', 240)
+          && validString('name', 500)
           && (!('completed' in request.resource.data) || request.resource.data.completed is bool)
           && (!('archived' in request.resource.data) || request.resource.data.archived is bool);
         allow delete: if isSignedInOwner(userId);
