@@ -536,7 +536,8 @@ async function renderDashboard() {
 
   const duePromotions = promoEventsSnapshot.docs.map((eventDoc) => {
     const event = { id: eventDoc.id, ...eventDoc.data() };
-    if (!isActiveRecord(event) || event.type !== "promotion") return null;
+    const isPromotionEvent = event.type === "promotion" || Boolean(event.promotionId);
+    if (!isActiveRecord(event) || !isPromotionEvent) return null;
     const contact = event.contactId ? contactById[event.contactId] : null;
     return {
       type: "promotion",

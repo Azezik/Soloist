@@ -1,4 +1,8 @@
-import { Timestamp, collection, db, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc, where } from "./firestore-service.js";
+import { Timestamp, collection, db, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc } from "./firestore-service.js";
+
+function isPromotionEvent(event = {}) {
+  return event?.type === "promotion" || Boolean(event?.promotionId);
+}
 
 
 async function upsertLeadEvent(currentUserId, leadId) {
@@ -60,7 +64,7 @@ export async function getCalendarData(currentUserId) {
     getDocs(collection(db, "users", currentUserId, "contacts")),
     getDocs(collection(db, "users", currentUserId, "tasks")),
     getDocs(collection(db, "users", currentUserId, "leads")),
-    getDocs(query(collection(db, "users", currentUserId, "events"), where("type", "==", "promotion"))),
+    getDocs(collection(db, "users", currentUserId, "events")),
   ]);
 
   const contactsById = contactsSnapshot.docs.reduce((acc, docItem) => {
@@ -87,7 +91,7 @@ export async function getCalendarData(currentUserId) {
 
   const promotionEvents = eventsSnapshot.docs
     .map((eventDoc) => ({ id: eventDoc.id, ...eventDoc.data() }))
-    .filter((event) => event.deleted !== true && !event.completed && !event.archived);
+    .filter((event) => isPromotionEvent(event) && event.deleted !== true && !event.completed && !event.archived);
 
   return { tasks, leads, promotionEvents };
 }
