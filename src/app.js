@@ -24,10 +24,14 @@ import {
   getStageById,
   normalizeAppSettings,
   sanitizeTimeString,
+  isLeadDropOutState,
 } from "./domain/settings.js";
 import { getAppSettings, getPipelineSettings, pipelineSettingsRef } from "./data/settings-service.js";
 import { renderCalendarScreen } from "./calendar/calendar-screen.js";
 import { rescheduleLeadAction } from "./data/calendar-service.js";
+import { PROMOTION_PRESETS, TARGETING_OPTIONS, buildPromotionTouchpoints, toPromotionDate } from "./promotions/presets.js";
+import { computeTargetLeads, isLeadActive, qualifiesForSnap } from "./promotions/snap-engine.js";
+import { createPromotion } from "./promotions/promotion-engine.js";
 import {
   DEFAULT_STAGE_TEMPLATE,
   LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER,
@@ -307,8 +311,8 @@ const LEAD_STATE_FILTERS = [
   { value: "drop_out", label: "Drop Out" },
 ];
 
-async function completeLeadStage({ userId, leadRef, lead, leadSource, pipelineSettings }) {
-  const nowDate = new Date();
+async function completeLeadStage({ userId, leadRef, lead, leadSource, pipelineSettings, completedAt = new Date() }) {
+  const nowDate = completedAt instanceof Date ? completedAt : new Date(completedAt);
   const currentStageId = lead.stageId || pipelineSettings.stages[0]?.id;
   const nextStage = getNextStage(pipelineSettings, currentStageId);
 
@@ -431,6 +435,10 @@ function routeFromHash() {
     return { page: "task-detail", taskId: hash.split("/")[1], params };
   }
 
+  if (hash.startsWith("promotion-event/")) {
+    return { page: "promotion-event-detail", promotionEventId: hash.split("/")[1], params };
+  }
+
   return { page: "dashboard" };
 }
 
@@ -459,7 +467,7 @@ async function renderDashboard() {
   const pipelineSettings = appSettings.pipeline;
   const pushPresets = appSettings.pushPresets;
 
-  const [contactsSnapshot, leadsSnapshot, legacyLeadsSnapshot, tasksSnapshot] = await Promise.all([
+  const [contactsSnapshot, leadsSnapshot, legacyLeadsSnapshot, tasksSnapshot, promoEventsSnapshot] = await Promise.all([
     getDocs(collection(db, "users", currentUser.uid, "contacts")),
     getDocs(
       query(
@@ -486,13 +494,19 @@ async function renderDashboard() {
         orderBy("scheduledFor", "asc")
       )
     ),
+    getDocs(
+      query(
+        collection(db, "users", currentUser.uid, "promotionEvents"),
+        where("completed", "==", false),
+        where("scheduledFor", "<=", now),
+        orderBy("scheduledFor", "asc")
+      )
+    ),
   ]);
 
   const contactById = contactsSnapshot.docs.reduce((acc, contactDoc) => {
     const value = { id: contactDoc.id, ...contactDoc.data() };
-    if (isActiveRecord(value)) {
-      acc[contactDoc.id] = value;
-    }
+    if (isActiveRecord(value)) acc[contactDoc.id] = value;
     return acc;
   }, {});
 
@@ -501,161 +515,72 @@ async function renderDashboard() {
     .filter((lead) => isActiveRecord(lead) && lead.stageStatus !== "completed")
     .map((lead) => {
       const contact = contactById[lead.contactId] || {};
-      return {
-        type: "lead",
-        id: lead.id,
-        source: "leads",
-        contactId: lead.contactId || null,
-        title: contact.name || "Unnamed Contact",
-        subtitle: contact.email || contact.phone || "No contact details",
-        email: contact.email || "",
-        stageId: lead.stageId,
-        product: lead.product || "",
-        dueAt: lead.nextActionAt,
-      };
+      return { type: "lead", id: lead.id, source: "leads", contactId: lead.contactId || null, title: contact.name || "Unnamed Contact", subtitle: contact.email || contact.phone || "No contact details", email: contact.email || "", stageId: lead.stageId, product: lead.product || "", dueAt: lead.nextActionAt };
     });
 
-  const legacyDueLeads = legacyLeadsSnapshot.docs
-    .map((contactDoc) => {
-      const contact = { id: contactDoc.id, ...contactDoc.data() };
-      if (!isActiveRecord(contact)) return null;
-      return {
-        type: "lead",
-        id: contact.id,
-        source: "contacts",
-        contactId: contact.id,
-        title: contact.name || "Unnamed Contact",
-        subtitle: contact.email || contact.phone || "No contact details",
-        stageId: contact.stageId,
-        dueAt: contact.nextActionAt,
-      };
-    })
-    .filter(Boolean);
+  const legacyDueLeads = legacyLeadsSnapshot.docs.map((contactDoc) => {
+    const contact = { id: contactDoc.id, ...contactDoc.data() };
+    if (!isActiveRecord(contact)) return null;
+    return { type: "lead", id: contact.id, source: "contacts", contactId: contact.id, title: contact.name || "Unnamed Contact", subtitle: contact.email || contact.phone || "No contact details", stageId: contact.stageId, dueAt: contact.nextActionAt };
+  }).filter(Boolean);
 
   const dueTasks = tasksSnapshot.docs.map((taskDoc) => {
     const task = { id: taskDoc.id, ...taskDoc.data() };
     if (!isActiveRecord(task)) return null;
     const contact = task.contactId ? contactById[task.contactId] : null;
-    return {
-      type: "task",
-      id: task.id,
-      contactId: task.contactId || null,
-      title: task.title || "Untitled Task",
-      subtitle: contact?.name || "No contact",
-      notes: task.notes || "",
-      dueAt: task.scheduledFor,
-    };
+    return { type: "task", id: task.id, contactId: task.contactId || null, title: task.title || "Untitled Task", subtitle: contact?.name || "No contact", notes: task.notes || "", dueAt: task.scheduledFor };
   }).filter(Boolean);
 
-  const pushOptionsMarkup = pushPresets
-    .map(
-      (preset, index) =>
-        `<button type="button" data-push-select="true" data-preset-index="${index}" class="push-option">${escapeHtml(preset.label)}</button>`
-    )
-    .join("");
+  const duePromotions = promoEventsSnapshot.docs.map((eventDoc) => {
+    const event = { id: eventDoc.id, ...eventDoc.data() };
+    if (!isActiveRecord(event)) return null;
+    const contact = event.contactId ? contactById[event.contactId] : null;
+    return { type: "promotion", id: event.id, leadId: event.leadId, title: contact?.name || "Unnamed Contact", subtitle: event.name || "Promotion touchpoint", dueAt: event.scheduledFor };
+  }).filter(Boolean);
 
-  const feedItems = [...dueLeads, ...legacyDueLeads, ...dueTasks].sort(
-    (a, b) => (toDate(a.dueAt)?.getTime() || 0) - (toDate(b.dueAt)?.getTime() || 0)
-  );
+  const pushOptionsMarkup = pushPresets.map((preset, index) => `<button type="button" data-push-select="true" data-preset-index="${index}" class="push-option">${escapeHtml(preset.label)}</button>`).join("");
 
-  const feedMarkup = feedItems.length
-    ? feedItems
-        .map((item) => {
-          if (item.type === "lead") {
-            const stageLabel = getStageById(pipelineSettings, item.stageId)?.label || "Unknown stage";
-            return `
-              <article class="panel feed-item feed-item-clickable feed-item--lead" data-open-feed-item="true" data-feed-type="lead" data-feed-id="${item.id}" data-lead-source="${item.source}" tabindex="0" role="button">
-                <p class="feed-type">Lead</p>
-                <h3>${escapeHtml(item.title)}</h3>
-                <p>${escapeHtml(item.subtitle)}</p>
-                ${item.email ? `<p><strong>Email:</strong> <span class="contact-detail-inline">${escapeHtml(item.email)} <button type="button" class="clipboard-copy-btn" data-copy-text="${escapeHtml(item.email)}" aria-label="Copy email" title="Copy email">${clipboardIconMarkup}</button></span></p>` : ""}
-                <p><strong>Stage:</strong> ${escapeHtml(stageLabel)}${item.product ? `<span class="dashboard-stage-product">• Product: ${escapeHtml(item.product)}</span>` : ""}</p>
-                <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
-                <div class="button-row">
-                  <button type="button" class="dashboard-action-btn" data-lead-action="done" data-lead-source="${item.source}" data-lead-id="${item.id}">Done</button>
-                  <details class="push-menu">
-                    <summary class="dashboard-action-btn">Push</summary>
-                    <div class="push-dropdown" data-push-source="${item.source}" data-push-entity="lead" data-push-id="${item.id}">
-                      ${pushOptionsMarkup}
-                    </div>
-                  </details>
-                </div>
-              </article>
-            `;
-          }
+  const feedItems = [...dueLeads, ...legacyDueLeads, ...dueTasks, ...duePromotions].sort((a, b) => (toDate(a.dueAt)?.getTime() || 0) - (toDate(b.dueAt)?.getTime() || 0));
 
-          return `
-            <article class="panel feed-item feed-item-clickable feed-item--task" data-open-feed-item="true" data-feed-type="task" data-feed-id="${item.id}" tabindex="0" role="button">
-              <p class="feed-type">Task</p>
-              <h3>${escapeHtml(item.title)}</h3>
-              <p>${escapeHtml(item.subtitle)}</p>
-              <p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>
-              ${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ""}
-              <div class="button-row">
-                <button type="button" class="dashboard-action-btn" data-task-action="done" data-task-id="${item.id}">Done</button>
-                <details class="push-menu">
-                  <summary class="dashboard-action-btn">Push</summary>
-                  <div class="push-dropdown" data-push-entity="task" data-push-id="${item.id}">
-                    ${pushOptionsMarkup}
-                  </div>
-                </details>
-              </div>
-            </article>
-          `;
-        })
-        .join("")
-    : '<p class="view-message">No leads or tasks are due right now.</p>';
+  const feedMarkup = feedItems.length ? feedItems.map((item) => {
+    if (item.type === "lead") {
+      const stageLabel = getStageById(pipelineSettings, item.stageId)?.label || "Unknown stage";
+      return `<article class="panel feed-item feed-item-clickable feed-item--lead" data-open-feed-item="true" data-feed-type="lead" data-feed-id="${item.id}" data-lead-source="${item.source}" tabindex="0" role="button"><p class="feed-type">Lead</p><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p>${item.email ? `<p><strong>Email:</strong> <span class="contact-detail-inline">${escapeHtml(item.email)} <button type="button" class="clipboard-copy-btn" data-copy-text="${escapeHtml(item.email)}" aria-label="Copy email" title="Copy email">${clipboardIconMarkup}</button></span></p>` : ""}<p><strong>Stage:</strong> ${escapeHtml(stageLabel)}${item.product ? `<span class="dashboard-stage-product">• Product: ${escapeHtml(item.product)}</span>` : ""}</p><p><strong>Due:</strong> ${formatDate(item.dueAt)}</p><div class="button-row"><button type="button" class="dashboard-action-btn" data-lead-action="done" data-lead-source="${item.source}" data-lead-id="${item.id}">Done</button><details class="push-menu"><summary class="dashboard-action-btn">Push</summary><div class="push-dropdown" data-push-source="${item.source}" data-push-entity="lead" data-push-id="${item.id}">${pushOptionsMarkup}</div></details></div></article>`;
+    }
 
-  viewContainer.innerHTML = `
-    <section class="crm-view crm-view--dashboard">
-      <div class="view-header">
-        <h2>Dashboard Feed</h2>
-        <div class="view-header-actions">
-          <button id="new-lead-btn" type="button">New Lead +</button>
-          <button id="add-task-btn" type="button">Add Task</button>
-        </div>
-      </div>
-      <div class="feed-list">${feedMarkup}</div>
-    </section>
-  `;
+    if (item.type === "promotion") {
+      return `<article class="panel feed-item feed-item-clickable feed-item--promotion" data-open-feed-item="true" data-feed-type="promotion" data-feed-id="${item.id}" tabindex="0" role="button"><p class="feed-type">Promotion</p><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p><p><strong>Due:</strong> ${formatDate(item.dueAt)}</p><div class="button-row"><button type="button" class="dashboard-action-btn" data-promo-event-done="${item.id}">Done</button></div></article>`;
+    }
 
-  document.getElementById("new-lead-btn")?.addEventListener("click", () => {
-    window.location.hash = "#add-lead";
-  });
+    return `<article class="panel feed-item feed-item-clickable feed-item--task" data-open-feed-item="true" data-feed-type="task" data-feed-id="${item.id}" tabindex="0" role="button"><p class="feed-type">Task</p><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p><p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ""}<div class="button-row"><button type="button" class="dashboard-action-btn" data-task-action="done" data-task-id="${item.id}">Done</button><details class="push-menu"><summary class="dashboard-action-btn">Push</summary><div class="push-dropdown" data-push-entity="task" data-push-id="${item.id}">${pushOptionsMarkup}</div></details></div></article>`;
+  }).join("") : '<p class="view-message">No leads, tasks, or promotions are due right now.</p>';
 
-  document.getElementById("add-task-btn")?.addEventListener("click", () => {
-    window.location.hash = "#tasks/new";
-  });
+  viewContainer.innerHTML = `<section class="crm-view crm-view--dashboard"><div class="view-header"><h2>Dashboard Feed</h2><div class="view-header-actions"><button id="new-lead-btn" type="button">New Lead +</button><button id="add-task-btn" type="button">Add Task</button></div></div><div class="feed-list">${feedMarkup}</div></section>`;
+
+  document.getElementById("new-lead-btn")?.addEventListener("click", () => { window.location.hash = "#add-lead"; });
+  document.getElementById("add-task-btn")?.addEventListener("click", () => { window.location.hash = "#tasks/new"; });
 
   viewContainer.querySelectorAll('[data-open-feed-item="true"]').forEach((itemEl) => {
     const navigateToDetail = () => {
       const feedType = itemEl.dataset.feedType;
       const feedId = itemEl.dataset.feedId;
       if (!feedType || !feedId) return;
-
-      if (feedType === "task") {
-        window.location.hash = appendOriginToHash(`#task/${feedId}`, window.location.hash);
-        return;
-      }
-
+      if (feedType === "task") return void (window.location.hash = appendOriginToHash(`#task/${feedId}`, window.location.hash));
+      if (feedType === "promotion") return void (window.location.hash = appendOriginToHash(`#promotion-event/${feedId}`, window.location.hash));
       const leadSource = itemEl.dataset.leadSource;
-      if (leadSource === "contacts") {
-        window.location.hash = appendOriginToHash(`#contact/${feedId}`, window.location.hash);
-        return;
-      }
-
+      if (leadSource === "contacts") return void (window.location.hash = appendOriginToHash(`#contact/${feedId}`, window.location.hash));
       window.location.hash = appendOriginToHash(`#lead/${feedId}`, window.location.hash);
     };
+    itemEl.addEventListener("click", (event) => { if (event.target.closest("button") || event.target.closest("summary")) return; navigateToDetail(); });
+    itemEl.addEventListener("keydown", (event) => { if (event.key !== "Enter" && event.key !== " ") return; event.preventDefault(); navigateToDetail(); });
+  });
 
-    itemEl.addEventListener("click", (event) => {
-      if (event.target.closest("button") || event.target.closest("summary")) return;
-      navigateToDetail();
-    });
-
-    itemEl.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      navigateToDetail();
+  viewContainer.querySelectorAll("[data-promo-event-done]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", async () => {
+      const eventId = buttonEl.dataset.promoEventDone;
+      if (!eventId) return;
+      await markPromotionEventDone(eventId);
+      await renderDashboard();
     });
   });
 
@@ -664,12 +589,10 @@ async function renderDashboard() {
       const leadId = buttonEl.dataset.leadId;
       const leadSource = buttonEl.dataset.leadSource;
       if (!leadId || !leadSource) return;
-
       const leadRef = doc(db, "users", currentUser.uid, leadSource, leadId);
       const leadSnapshot = await getDoc(leadRef);
       if (!leadSnapshot.exists()) return;
       const lead = leadSnapshot.data();
-
       await completeLeadStage({ userId: currentUser.uid, leadRef, lead, leadSource, pipelineSettings });
       await renderDashboard();
     });
@@ -679,13 +602,7 @@ async function renderDashboard() {
     buttonEl.addEventListener("click", async () => {
       const taskId = buttonEl.dataset.taskId;
       if (!taskId) return;
-
-      await updateDoc(doc(db, "users", currentUser.uid, "tasks", taskId), {
-        completed: true,
-        status: "completed",
-        archived: true,
-        updatedAt: serverTimestamp(),
-      });
+      await updateDoc(doc(db, "users", currentUser.uid, "tasks", taskId), { completed: true, status: "completed", archived: true, updatedAt: serverTimestamp() });
       await renderDashboard();
     });
   });
@@ -697,24 +614,18 @@ async function renderDashboard() {
       const presetIndex = Number.parseInt(buttonEl.dataset.presetIndex, 10);
       const preset = pushPresets[presetIndex];
       if (!preset) return;
-
       const pushContainer = buttonEl.closest("[data-push-entity]");
       const entityType = pushContainer?.dataset.pushEntity;
       const entityId = pushContainer?.dataset.pushId;
       const leadSource = pushContainer?.dataset.pushSource;
       if (!entityType || !entityId) return;
-
       const pushedAt = computePushedTimestamp(new Date(), preset);
       if (entityType === "task") {
-        await updateDoc(doc(db, "users", currentUser.uid, "tasks", entityId), {
-          scheduledFor: pushedAt,
-          updatedAt: serverTimestamp(),
-        });
+        await updateDoc(doc(db, "users", currentUser.uid, "tasks", entityId), { scheduledFor: pushedAt, updatedAt: serverTimestamp() });
       } else {
         if (!leadSource) return;
         await pushLeadFromPreset({ userId: currentUser.uid, entityId, leadSource, preset });
       }
-
       await renderDashboard();
     });
   });
@@ -2023,6 +1934,299 @@ function renderPlaceholder(title) {
   `;
 }
 
+async function markPromotionEventDone(eventId) {
+  const eventRef = doc(db, "users", currentUser.uid, "promotionEvents", eventId);
+  const eventSnapshot = await getDoc(eventRef);
+  if (!eventSnapshot.exists()) return;
+
+  const event = { id: eventSnapshot.id, ...eventSnapshot.data() };
+  if (event.completed) return;
+
+  await updateDoc(eventRef, {
+    completed: true,
+    archived: true,
+    status: "completed",
+    completedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  const siblingSnapshot = await getDocs(
+    query(collection(db, "users", currentUser.uid, "promotionEvents"), where("promotionId", "==", event.promotionId), where("leadId", "==", event.leadId))
+  );
+  const siblings = siblingSnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
+  const remaining = siblings.filter((item) => !item.completed && item.id !== eventId);
+
+  if (remaining.length === 0 && event.leadId) {
+    const leadRef = doc(db, "users", currentUser.uid, "leads", event.leadId);
+    const [leadSnapshot, pipelineSettings] = await Promise.all([getDoc(leadRef), getPipelineSettings(currentUser.uid)]);
+    if (leadSnapshot.exists()) {
+      await completeLeadStage({
+        userId: currentUser.uid,
+        leadRef,
+        lead: leadSnapshot.data(),
+        leadSource: "leads",
+        pipelineSettings,
+        completedAt: toDate(event.scheduledFor) || new Date(),
+      });
+    }
+  }
+}
+
+async function renderPromotionEventDetail(eventId) {
+  renderLoading("Loading promotion event...");
+  const route = routeFromHash();
+  const originRoute = getCurrentRouteOrigin(route.params);
+
+  const eventRef = doc(db, "users", currentUser.uid, "promotionEvents", eventId);
+  const eventSnapshot = await getDoc(eventRef);
+  if (!eventSnapshot.exists()) {
+    viewContainer.innerHTML = '<p class="view-message">Promotion event not found.</p>';
+    return;
+  }
+
+  const event = { id: eventSnapshot.id, ...eventSnapshot.data() };
+  const [contactSnapshot, leadSnapshot] = await Promise.all([
+    event.contactId ? getDoc(doc(db, "users", currentUser.uid, "contacts", event.contactId)) : Promise.resolve(null),
+    event.leadId ? getDoc(doc(db, "users", currentUser.uid, "leads", event.leadId)) : Promise.resolve(null),
+  ]);
+  const contact = contactSnapshot?.exists?.() ? { id: contactSnapshot.id, ...contactSnapshot.data() } : null;
+  const lead = leadSnapshot?.exists?.() ? { id: leadSnapshot.id, ...leadSnapshot.data() } : null;
+  const mailBody = [event.template?.opening || "", event.template?.body || "", event.template?.closing || ""].filter(Boolean).join("
+
+").trim();
+  const mailTo = String(contact?.email || "").trim();
+
+  viewContainer.innerHTML = `
+    <section class="crm-view crm-view--leads">
+      <div class="view-header">
+        <h2>Promotion Event</h2>
+        <div class="view-header-actions">
+          <button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button>
+        </div>
+      </div>
+      <div class="panel panel--lead detail-grid feed-item--promotion">
+        <p><strong>Lead:</strong> ${escapeHtml(contact?.name || "Unnamed Contact")}</p>
+        <p><strong>Promotion:</strong> ${escapeHtml(event.name || "Promotion touchpoint")}</p>
+        <p><strong>Due:</strong> ${formatDate(event.scheduledFor)}</p>
+      </div>
+      <div class="panel panel--lead notes-panel">
+        <h3>Template</h3>
+        <label class="full-width">Subject
+          <input value="${escapeHtml(event.template?.subject || "")}" readonly />
+        </label>
+        <label class="full-width">Opening
+          <textarea rows="2" readonly>${escapeHtml(event.template?.opening || "")}</textarea>
+        </label>
+        <label class="full-width">Body
+          <textarea rows="6" readonly>${escapeHtml(event.template?.body || "")}</textarea>
+        </label>
+        <label class="full-width">Closing
+          <textarea rows="2" readonly>${escapeHtml(event.template?.closing || "")}</textarea>
+        </label>
+        <div class="button-row full-width">
+          <button id="promotion-open-mail-btn" type="button" ${mailTo ? `data-mail-to="${escapeHtml(mailTo)}"` : "disabled"} data-mail-subject="${escapeHtml(event.template?.subject || "")}" data-mail-body="${escapeHtml(mailBody)}">Open in mail</button>
+          <button id="promotion-done-btn" type="button" class="secondary-btn">Done</button>
+          ${lead ? `<a href="#lead/${encodeURIComponent(lead.id)}" class="timeline-link-pill">Open lead</a>` : ""}
+        </div>
+      </div>
+    </section>
+  `;
+
+  document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
+    window.location.hash = originRoute || "#dashboard";
+  });
+
+  document.getElementById("promotion-done-btn")?.addEventListener("click", async () => {
+    await markPromotionEventDone(eventId);
+    window.location.hash = originRoute || "#dashboard";
+  });
+
+  document.getElementById("promotion-open-mail-btn")?.addEventListener("click", () => {
+    const button = document.getElementById("promotion-open-mail-btn");
+    const to = button?.dataset.mailTo || "";
+    if (!to) return;
+    const subject = encodeURIComponent(button?.dataset.mailSubject || "");
+    const body = encodeURIComponent(button?.dataset.mailBody || "");
+    window.open(`mailto:${encodeURIComponent(to)}?subject=${subject}&body=${body}`, "_blank");
+  });
+}
+
+async function renderPromotionsPage() {
+  renderLoading("Loading promotions...");
+  const appSettings = await getAppSettings(currentUser.uid);
+  const snapWindowDays = appSettings.snapWindowDays || 2;
+  const [promotionsSnapshot, leadsSnapshot, contactsSnapshot] = await Promise.all([
+    getDocs(query(collection(db, "users", currentUser.uid, "promotions"), orderBy("createdAt", "desc"))),
+    getDocs(collection(db, "users", currentUser.uid, "leads")),
+    getDocs(collection(db, "users", currentUser.uid, "contacts")),
+  ]);
+
+  const contactsById = contactsSnapshot.docs.reduce((acc, entry) => {
+    acc[entry.id] = { id: entry.id, ...entry.data() };
+    return acc;
+  }, {});
+
+  const leads = leadsSnapshot.docs.map((leadDoc) => {
+    const lead = { id: leadDoc.id, ...leadDoc.data() };
+    const contact = contactsById[lead.contactId] || {};
+    return { ...lead, name: contact.name || lead.name || "", product: lead.product || "" };
+  }).filter((lead) => isActiveRecord(lead));
+
+  const promotions = promotionsSnapshot.docs.map((promoDoc) => ({ id: promoDoc.id, ...promoDoc.data() }));
+  const now = new Date();
+  const active = promotions.filter((promo) => {
+    const endDate = toPromotionDate(promo.endDate);
+    return endDate && endDate.getTime() >= now.getTime();
+  }).sort((a, b) => {
+    const delta = (toPromotionDate(a.endDate)?.getTime() || 0) - (toPromotionDate(b.endDate)?.getTime() || 0);
+    if (delta !== 0) return delta;
+    return (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0);
+  });
+
+  const finished = promotions.filter((promo) => {
+    const endDate = toPromotionDate(promo.endDate);
+    return endDate && endDate.getTime() < now.getTime();
+  }).sort((a, b) => (toPromotionDate(b.endDate)?.getTime() || 0) - (toPromotionDate(a.endDate)?.getTime() || 0));
+
+  const renderCards = (items) => items.length ? items.map((promo) => `<article class="panel panel--promo"><h3>${escapeHtml(promo.name || "Untitled promo")}</h3></article>`).join("") : `<p class="view-message">No promotions.</p>`;
+
+  viewContainer.innerHTML = `
+    <section class="crm-view crm-view--promotions">
+      <div class="view-header"><h2>Promotions</h2></div>
+      <div class="panel"><button id="new-promo-btn" class="full-width" type="button">New Promo ></button></div>
+      <div class="panel"><h3>Active</h3><div>${renderCards(active)}</div></div>
+      <div class="panel"><h3>Finished</h3><div>${renderCards(finished)}</div></div>
+    </section>
+  `;
+
+  document.getElementById("new-promo-btn")?.addEventListener("click", () => {
+    renderPromotionCreateFlow({ snapWindowDays, leads });
+  });
+}
+
+function renderPromotionCreateFlow({ snapWindowDays, leads }) {
+  const state = {
+    page: 1,
+    name: "",
+    endDate: "",
+    presetKey: "",
+    touchpoints: [],
+    targeting: [],
+    selectedLeadIds: new Set(),
+    searchText: "",
+  };
+
+  const recentPresets = [
+    ...Object.values(PROMOTION_PRESETS).filter((entry) => entry.key !== "custom"),
+  ];
+
+  const draw = () => {
+    if (state.page === 1) {
+      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Promo</h2></div><div class="panel form-grid"><label>Promo Name<input id="promo-name" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-date" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><p><strong>Presets (Required Selection)</strong></p><div class="promo-presets">${Object.values(PROMOTION_PRESETS).map((preset) => `<button type="button" class="secondary-btn ${state.presetKey === preset.key ? "is-active" : ""}" data-preset-key="${preset.key}">${preset.label}</button>`).join("")}</div><p><strong>Recent Presets</strong></p><div>${recentPresets.map((preset) => `<button type="button" class="secondary-btn" data-preset-key="${preset.key}">${preset.label}</button>`).join("")}</div><button id="promo-continue-btn" type="button">Continue</button></div></section>`;
+
+      document.querySelectorAll("[data-preset-key]").forEach((buttonEl) => {
+        buttonEl.addEventListener("click", () => {
+          state.presetKey = buttonEl.dataset.presetKey || "custom";
+          const preset = PROMOTION_PRESETS[state.presetKey] || PROMOTION_PRESETS.custom;
+          state.touchpoints = preset.touchpoints.map((offset, index) => ({ id: `tp-${index + 1}`, order: index, offsetDays: offset, template: { subject: "", opening: "", body: "", closing: "" } }));
+          state.targeting = [...preset.targeting];
+          draw();
+        });
+      });
+
+      document.getElementById("promo-continue-btn")?.addEventListener("click", () => {
+        state.name = document.getElementById("promo-name")?.value || "";
+        state.endDate = document.getElementById("promo-end-date")?.value || "";
+        if (!state.name.trim() || !state.endDate || !state.presetKey) return alert("Name, end date, and preset are required.");
+        state.page = 2;
+        draw();
+      });
+      return;
+    }
+
+    const promotionConfig = { name: state.name, endDate: state.endDate, touchpoints: state.touchpoints, targeting: state.targeting };
+    const targetLeads = computeTargetLeads({ leads, promotion: promotionConfig, snapWindowDays, searchText: state.searchText });
+    if (!state.selectedLeadIds.size) targetLeads.forEach((lead) => state.selectedLeadIds.add(lead.id));
+
+    viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>Promotion Setup</h2></div><div class="panel form-grid"><h3>Basic Info</h3><label>Promo Name<input id="promo-name-edit" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-edit" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><h3>Touchpoints</h3><div id="touchpoint-list">${state.touchpoints.map((tp, index) => `<div class="panel detail-grid"><label>Notify Leads <input type="number" min="0" data-touchpoint-offset="${index}" value="${tp.offsetDays}" /> days before end of promo</label><label>Subject<input data-touchpoint-subject="${index}" value="${escapeHtml(tp.template.subject)}" /></label><label>Opening<textarea rows="2" data-touchpoint-opening="${index}">${escapeHtml(tp.template.opening)}</textarea></label><label>Body<textarea rows="4" data-touchpoint-body="${index}">${escapeHtml(tp.template.body)}</textarea></label><label>Closing<textarea rows="2" data-touchpoint-closing="${index}">${escapeHtml(tp.template.closing)}</textarea></label></div>`).join("")}</div><button id="add-touchpoint-btn" class="secondary-btn" type="button">Add Touchpoint</button><h3>Targeting Strategy</h3><div class="promo-targeting">${TARGETING_OPTIONS.map((option) => `<button type="button" class="secondary-btn ${state.targeting.includes(option.id) ? "is-active" : ""}" data-targeting-id="${option.id}">${option.label}</button>`).join("")}</div><label>Custom Search<input id="promo-search" value="${escapeHtml(state.searchText)}" placeholder="Name or product" /></label><label><input type="checkbox" id="promo-select-all" checked /> Select All</label><div class="lead-list">${targetLeads.map((lead) => `<article class="panel panel--lead"><label><input type="checkbox" data-target-lead-id="${lead.id}" ${state.selectedLeadIds.has(lead.id) ? "checked" : ""} /> ${escapeHtml(lead.name || "Unnamed")}</label><p>${escapeHtml(lead.product || "No product")}</p><small>${qualifiesForSnap(lead, state.touchpoints, new Date(state.endDate), snapWindowDays) ? "Snap Active" : isLeadDropOutState(lead) ? "Drop-Out" : "Active"}</small></article>`).join("")}</div><button id="create-promo-btn" type="button">Create Promo</button></div></section>`;
+
+    document.getElementById("add-touchpoint-btn")?.addEventListener("click", () => {
+      state.touchpoints.push({ id: `tp-${state.touchpoints.length + 1}`, order: state.touchpoints.length, offsetDays: 0, template: { subject: "", opening: "", body: "", closing: "" } });
+      draw();
+    });
+
+    document.querySelectorAll("[data-targeting-id]").forEach((buttonEl) => {
+      buttonEl.addEventListener("click", () => {
+        const id = buttonEl.dataset.targetingId;
+        if (!id) return;
+        if (state.targeting.includes(id)) state.targeting = state.targeting.filter((entry) => entry !== id);
+        else state.targeting.push(id);
+        draw();
+      });
+    });
+
+    document.getElementById("promo-search")?.addEventListener("input", (event) => {
+      state.searchText = String(event.target.value || "");
+      draw();
+    });
+
+    document.getElementById("promo-select-all")?.addEventListener("change", (event) => {
+      const selected = event.target.checked;
+      targetLeads.forEach((lead) => {
+        if (selected) state.selectedLeadIds.add(lead.id);
+        else state.selectedLeadIds.delete(lead.id);
+      });
+      draw();
+    });
+
+    document.querySelectorAll("[data-target-lead-id]").forEach((inputEl) => {
+      inputEl.addEventListener("change", () => {
+        const leadId = inputEl.dataset.targetLeadId;
+        if (!leadId) return;
+        if (inputEl.checked) state.selectedLeadIds.add(leadId);
+        else state.selectedLeadIds.delete(leadId);
+      });
+    });
+
+    document.getElementById("create-promo-btn")?.addEventListener("click", async () => {
+      state.name = document.getElementById("promo-name-edit")?.value || state.name;
+      state.endDate = document.getElementById("promo-end-edit")?.value || state.endDate;
+      state.touchpoints = state.touchpoints.map((tp, index) => ({
+        ...tp,
+        offsetDays: Number.parseInt(document.querySelector(`[data-touchpoint-offset="${index}"]`)?.value || tp.offsetDays, 10) || 0,
+        template: {
+          subject: document.querySelector(`[data-touchpoint-subject="${index}"]`)?.value || "",
+          opening: document.querySelector(`[data-touchpoint-opening="${index}"]`)?.value || "",
+          body: document.querySelector(`[data-touchpoint-body="${index}"]`)?.value || "",
+          closing: document.querySelector(`[data-touchpoint-closing="${index}"]`)?.value || "",
+        },
+      }));
+
+      const selectedLeads = leads.filter((lead) => state.selectedLeadIds.has(lead.id));
+      if (!selectedLeads.length) return alert("Please select at least one lead.");
+
+      await createPromotion({
+        db,
+        userId: currentUser.uid,
+        promotion: {
+          name: state.name,
+          endDate: state.endDate,
+          touchpoints: buildPromotionTouchpoints(state.touchpoints),
+          targeting: state.targeting,
+          presetKey: state.presetKey,
+        },
+        selectedLeads,
+        snapWindowDays,
+        presetLabel: PROMOTION_PRESETS[state.presetKey]?.label || "Custom",
+      });
+
+      await renderPromotionsPage();
+    });
+  };
+
+  draw();
+}
+
 async function renderSettingsPage() {
   renderLoading("Loading settings...");
 
@@ -2067,6 +2271,9 @@ async function renderSettingsPage() {
         <div class="view-header"><h2>Settings</h2></div>
         <form id="pipeline-settings-form" class="panel form-grid">
           <h3>Pipeline Settings</h3>
+          <label>Snap Window (Days)
+            <input name="snapWindowDays" type="number" min="0" step="1" value="${editableSettings.snapWindowDays || 2}" required />
+          </label>
           <label>Day Start Time (HH:MM)
             <input name="dayStartTime" type="time" value="${pipelineSettings.dayStartTime}" required />
           </label>
@@ -2195,6 +2402,7 @@ async function renderSettingsPage() {
       const normalized = normalizeAppSettings({
         pipeline: { dayStartTime: latestSettings.pipeline.dayStartTime, stages: updatedStages },
         pushPresets: latestSettings.pushPresets,
+        snapWindowDays: latestSettings.snapWindowDays,
       });
 
       await setDoc(pipelineSettingsRef(currentUser.uid), normalized);
@@ -2234,6 +2442,7 @@ async function renderSettingsPage() {
       const normalized = normalizeAppSettings({
         pipeline: pipelineFromForm,
         pushPresets: pushPresetsPayload,
+        snapWindowDays: Number.parseInt(String(formData.get("snapWindowDays") || editableSettings.snapWindowDays || 2), 10),
       });
       await setDoc(pipelineSettingsRef(currentUser.uid), normalized);
       editableSettings = normalized;
@@ -2329,7 +2538,12 @@ async function renderCurrentRoute() {
     }
 
     if (route.page === "promotions") {
-      renderPlaceholder("Promotions");
+      await renderPromotionsPage();
+      return;
+    }
+
+    if (route.page === "promotion-event-detail" && route.promotionEventId) {
+      await renderPromotionEventDetail(route.promotionEventId);
       return;
     }
 

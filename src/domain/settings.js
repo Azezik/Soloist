@@ -41,6 +41,7 @@ function cloneDefaultAppSettings() {
   return {
     pipeline: cloneDefaultPipelineSettings(),
     pushPresets: cloneDefaultPushPresets(),
+    snapWindowDays: 2,
   };
 }
 
@@ -131,9 +132,11 @@ function normalizePushPresets(inputPresets) {
 
 function normalizeAppSettings(input) {
   const pipelineSource = input?.pipeline || input;
+  const snapRaw = Number.parseInt(input?.snapWindowDays, 10);
   return {
     pipeline: normalizePipelineSettings(pipelineSource),
     pushPresets: normalizePushPresets(input?.pushPresets),
+    snapWindowDays: Number.isNaN(snapRaw) ? 2 : Math.max(0, snapRaw),
   };
 }
 
@@ -203,6 +206,11 @@ function computeInitialLeadNextActionAt(pipelineSettings, stageId, baseNow = new
   return Timestamp.fromDate(new Date(baseNow.getTime() + offsetMilliseconds));
 }
 
+
+function isLeadDropOutState(lead) {
+  return String(lead?.state || "").trim().toLowerCase() === "drop_out";
+}
+
 function computePushedTimestamp(baseNow, preset) {
   const behavior = preset?.behavior || {};
   const nowDate = new Date(baseNow);
@@ -245,4 +253,5 @@ export {
   getStageById,
   normalizeAppSettings,
   sanitizeTimeString,
+  isLeadDropOutState,
 };

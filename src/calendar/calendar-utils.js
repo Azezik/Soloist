@@ -41,7 +41,7 @@ export function buildWeekDays(focusedDate, weekStartsOn = 0) {
   return days;
 }
 
-export function normalizeCalendarItems(tasks, leads) {
+export function normalizeCalendarItems(tasks, leads, promotionEvents = []) {
   const taskItems = tasks
     .map((task) => {
       const date = toDate(task.scheduledFor);
@@ -76,7 +76,24 @@ export function normalizeCalendarItems(tasks, leads) {
     })
     .filter(Boolean);
 
-  return [...taskItems, ...leadItems].sort((a, b) => a.date.getTime() - b.date.getTime());
+  const promotionItems = promotionEvents
+    .map((event) => {
+      const date = toDate(event.scheduledFor);
+      if (!date) return null;
+      return {
+        id: event.id,
+        type: "promotion",
+        title: event.name || "Promotion",
+        secondary: "Promotion",
+        date,
+        dayKey: toDayKey(date),
+        hasTime: hasSpecificTime(date),
+        path: `#promotion-event/${event.id}`,
+      };
+    })
+    .filter(Boolean);
+
+  return [...taskItems, ...leadItems, ...promotionItems].sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
 export function buildProjectedLeadItems(leads, pipelineSettings, rangeStart, rangeEnd) {
