@@ -2056,6 +2056,7 @@ async function renderPromotionsPage() {
   renderLoading("Loading promotions...");
   const appSettings = await getAppSettings(currentUser.uid);
   const snapWindowDays = appSettings.snapWindowDays || 2;
+  const pipelineStages = appSettings.pipeline?.stages || [];
   const [promotionsSnapshot, leadsSnapshot, contactsSnapshot] = await Promise.all([
     getDocs(query(collection(db, "users", currentUser.uid, "promotions"), orderBy("createdAt", "desc"))),
     getDocs(collection(db, "users", currentUser.uid, "leads")),
@@ -2101,7 +2102,7 @@ async function renderPromotionsPage() {
   `;
 
   document.getElementById("new-promo-btn")?.addEventListener("click", () => {
-    renderPromotionCreateFlow({ snapWindowDays, leads, promotions });
+    renderPromotionCreateFlow({ snapWindowDays, pipelineStages, leads, promotions });
   });
 }
 
@@ -2155,7 +2156,7 @@ function syncPromotionTouchpointsFromForm(touchpoints = []) {
   });
 }
 
-function renderPromotionCreateFlow({ snapWindowDays, leads, promotions = [] }) {
+function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads, promotions = [] }) {
   const state = {
     page: 1,
     name: "",
@@ -2243,7 +2244,7 @@ function renderPromotionCreateFlow({ snapWindowDays, leads, promotions = [] }) {
 
     const getTargetLeads = () => {
       const promotionConfig = { name: state.name, endDate: state.endDate, touchpoints: state.touchpoints, targeting: state.targeting };
-      return computeTargetLeads({ leads, promotion: promotionConfig, snapWindowDays, searchText: state.searchText });
+      return computeTargetLeads({ leads, promotion: promotionConfig, snapWindowDays, searchText: state.searchText, pipelineStages });
     };
 
     const targetLeads = getTargetLeads();
@@ -2277,7 +2278,7 @@ function renderPromotionCreateFlow({ snapWindowDays, leads, promotions = [] }) {
       } else {
         leadListEl.innerHTML = visibleTargetLeads
           .map(
-            (lead) => `<article class="panel panel--lead"><label><input type="checkbox" data-target-lead-id="${lead.id}" ${state.selectedLeadIds.has(lead.id) ? "checked" : ""} /> ${escapeHtml(lead.name || "Unnamed")}</label><p>${escapeHtml(lead.product || "No product")}</p><small>${qualifiesForSnap(lead, state.touchpoints, new Date(state.endDate), snapWindowDays) ? "Snap Active" : isLeadDropOutState(lead) ? "Drop-Out" : "Active"}</small></article>`,
+            (lead) => `<article class="panel panel--lead"><label><input type="checkbox" data-target-lead-id="${lead.id}" ${state.selectedLeadIds.has(lead.id) ? "checked" : ""} /> ${escapeHtml(lead.name || "Unnamed")}</label><p>${escapeHtml(lead.product || "No product")}</p><small>${qualifiesForSnap(lead, state.touchpoints, new Date(state.endDate), snapWindowDays, pipelineStages) ? "Snap Active" : isLeadDropOutState(lead) ? "Drop-Out" : "Active"}</small></article>`,
           )
           .join("");
       }
@@ -2361,6 +2362,7 @@ function renderPromotionCreateFlow({ snapWindowDays, leads, promotions = [] }) {
         },
         selectedLeads,
         snapWindowDays,
+        pipelineStages,
         presetLabel: PROMOTION_PRESETS[state.presetKey]?.label || "Custom",
       });
 

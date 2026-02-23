@@ -28,7 +28,7 @@ function buildPromotionEvents(promotionId, lead, touchpoints, endDate) {
   });
 }
 
-async function createPromotion({ db, userId, promotion, selectedLeads, snapWindowDays = 2, presetLabel = "Custom" }) {
+async function createPromotion({ db, userId, promotion, selectedLeads, snapWindowDays = 2, pipelineStages = [], presetLabel = "Custom" }) {
   const endDate = toPromotionDate(promotion.endDate);
   if (!endDate) throw new Error("Invalid end date");
 
@@ -47,7 +47,7 @@ async function createPromotion({ db, userId, promotion, selectedLeads, snapWindo
   });
 
   for (const lead of selectedLeads) {
-    const snapped = qualifiesForSnap(lead, promotion.touchpoints, endDate, snapWindowDays);
+    const snapped = qualifiesForSnap(lead, promotion.touchpoints, endDate, snapWindowDays, pipelineStages);
     if (snapped) {
       await setDoc(doc(db, "users", userId, "promotions", promotionRef.id, "snapshots", lead.id), {
         leadId: lead.id,
