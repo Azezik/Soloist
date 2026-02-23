@@ -13,7 +13,7 @@ function permissionError(step, error) {
   return new Error(`Promotion save failed at ${step}${code}: ${message}`);
 }
 
-function buildPromotionEvents(promotionId, lead, touchpoints, endDate, snappedStageId = null) {
+function buildPromotionEvents(promotionId, lead, touchpoints, endDate, snappedStageId = null, snapMode = null) {
   return touchpoints.map((touchpoint) => {
     const scheduledDate = computeTouchpointDate(endDate, touchpoint.offsetDays);
     const scheduledFor = Timestamp.fromDate(scheduledDate);
@@ -45,12 +45,23 @@ function buildPromotionEvents(promotionId, lead, touchpoints, endDate, snappedSt
     if (lead.contactId) event.contactId = lead.contactId;
     if (lead.stageId) event.stageId = lead.stageId;
     if (snappedStageId) event.snappedStageId = snappedStageId;
+    if (snapMode) event.snapMode = snapMode;
 
     return event;
   });
 }
 
-async function createPromotion({ db, userId, promotion, selectedLeads, snapWindowDays = 2, pipelineStages = [], presetLabel = "Custom" }) {
+async function createPromotion({
+  db,
+  userId,
+  promotion,
+  selectedLeads,
+  snapWindowDays = 2,
+  pipelineStages = [],
+  presetLabel = "Custom",
+  snapModeByLead = {},
+  selectionSourcesByLead = {},
+}) {
   const endDate = toPromotionDate(promotion.endDate);
   if (!endDate) throw new Error("Invalid end date");
 
@@ -62,6 +73,8 @@ async function createPromotion({ db, userId, promotion, selectedLeads, snapWindo
       touchpoints: promotion.touchpoints,
       targeting: promotion.targeting,
       leadIds: selectedLeads.map((lead) => lead.id),
+      snapModeByLead,
+      selectionSourcesByLead,
       presetKey: promotion.presetKey || "custom",
       presetLabel,
       status: "active",
@@ -89,7 +102,8 @@ async function createPromotion({ db, userId, promotion, selectedLeads, snapWindo
       }
     }
 
-    const events = buildPromotionEvents(promotionRef.id, lead, promotion.touchpoints, endDate, snapMatch?.stageId || null);
+    const leadSnapMode = snapModeByLead?.[lead.id] || null;
+    const events = buildPromotionEvents(promotionRef.id, lead, promotion.touchpoints, endDate, snapMatch?.stageId || null, leadSnapMode);
     for (const event of events) {
       try {
         await addDoc(collection(db, "users", userId, "events"), event);
