@@ -1,5 +1,7 @@
 import { toPromotionDate } from "./presets.js";
 
+const BASE_TARGETING_KEYS = ["snap_active", "all_active", "drop_out"];
+
 function computeTouchpointDate(endDate, offsetDays) {
   const base = new Date(endDate);
   base.setDate(base.getDate() - Math.max(0, Number(offsetDays) || 0));
@@ -22,11 +24,18 @@ function qualifiesForSnap(lead, touchpoints, endDate, snapWindowDays = 2) {
   if (!isLeadActive(lead)) return false;
   const scheduledAt = toPromotionDate(lead.nextActionAt);
   if (!scheduledAt) return false;
+  const touchpointList = Array.isArray(touchpoints) ? touchpoints : [];
+  if (!touchpointList.length) return false;
 
-  const windowMs = Math.max(0, Number(snapWindowDays) || 0) * 24 * 60 * 60 * 1000;
-  return touchpoints.some((touchpoint) => {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const windowDays = Math.max(0, Number(snapWindowDays) || 0);
+  const scheduledDay = Date.UTC(scheduledAt.getFullYear(), scheduledAt.getMonth(), scheduledAt.getDate());
+
+  return touchpointList.some((touchpoint) => {
     const touchpointDate = computeTouchpointDate(endDate, touchpoint.offsetDays);
-    return Math.abs(scheduledAt.getTime() - touchpointDate.getTime()) <= windowMs;
+    const touchpointDay = Date.UTC(touchpointDate.getFullYear(), touchpointDate.getMonth(), touchpointDate.getDate());
+    const dayDiff = Math.abs(scheduledDay - touchpointDay) / dayMs;
+    return dayDiff <= windowDays;
   });
 }
 
@@ -40,11 +49,20 @@ function computeTargetLeads({ leads, promotion, snapWindowDays = 2, searchText =
     const active = isLeadActive(lead);
     const dropOut = isLeadDropOut(lead);
     const snapActive = qualifiesForSnap(lead, promotion.touchpoints || [], endDate, snapWindowDays);
+    const eligibleForSearch = active || dropOut;
 
-    const includeByToggle =
-      (targeting.includes("all_active") && active) ||
-      (targeting.includes("drop_out") && dropOut) ||
-      (targeting.includes("snap_active") && snapActive);
+    const selectedBaseFilters = BASE_TARGETING_KEYS.filter((key) => targeting.includes(key));
+    const customSearchSelected = targeting.includes("custom_search");
+
+    let includeByToggle = false;
+    if (selectedBaseFilters.length) {
+      includeByToggle =
+        (selectedBaseFilters.includes("all_active") && active) ||
+        (selectedBaseFilters.includes("drop_out") && dropOut) ||
+        (selectedBaseFilters.includes("snap_active") && snapActive);
+    } else if (customSearchSelected || text) {
+      includeByToggle = eligibleForSearch;
+    }
 
     if (!includeByToggle) return false;
     if (!text) return true;

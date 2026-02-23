@@ -2263,8 +2263,17 @@ function renderPromotionCreateFlow({ snapWindowDays, leads, promotions = [] }) {
       }
 
       if (!visibleTargetLeads.length) {
+        const hasBaseTargeting = state.targeting.some((entry) => ["snap_active", "all_active", "drop_out"].includes(entry));
         const dropOutOnly = state.targeting.length === 1 && state.targeting.includes("drop_out");
-        leadListEl.innerHTML = `<article class="panel panel--lead"><p>${dropOutOnly ? "No dropped-off leads are currently available." : "No leads match the current targeting and search filters."}</p></article>`;
+        const customOnly = !hasBaseTargeting && state.targeting.includes("custom_search");
+        const emptyMessage = customOnly
+          ? "No leads match your custom search. Custom Search scans active and dropped-off leads."
+          : dropOutOnly
+            ? "No dropped-off leads are currently available."
+            : hasBaseTargeting
+              ? "No leads match the current targeting and search filters."
+              : "Select a targeting option, or enable Custom Search to search across active and dropped-off leads.";
+        leadListEl.innerHTML = `<article class="panel panel--lead"><p>${emptyMessage}</p></article>`;
       } else {
         leadListEl.innerHTML = visibleTargetLeads
           .map(
