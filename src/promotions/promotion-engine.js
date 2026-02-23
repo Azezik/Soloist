@@ -16,6 +16,7 @@ function permissionError(step, error) {
 function buildPromotionEvents(promotionId, lead, touchpoints, endDate) {
   return touchpoints.map((touchpoint) => {
     const scheduledDate = computeTouchpointDate(endDate, touchpoint.offsetDays);
+    const scheduledFor = Timestamp.fromDate(scheduledDate);
     const event = {
       promotionId,
       leadId: lead.id,
@@ -25,11 +26,17 @@ function buildPromotionEvents(promotionId, lead, touchpoints, endDate) {
       touchpointName: touchpoint.name || `Touchpoint ${Number(touchpoint.order || 0) + 1}`,
       template: touchpoint.template,
       templateConfig: touchpoint.templateConfig || touchpoint.template,
-      scheduledFor: Timestamp.fromDate(scheduledDate),
+      scheduledFor,
+      // Keep this aligned with lead/task scheduling shape so downstream consumers
+      // that expect nextActionAt-style fields can treat promotion events the same way.
+      nextActionAt: scheduledFor,
       completed: false,
       archived: false,
+      deleted: false,
       status: "open",
       type: "promotion",
+      title: clampString(touchpoint.name || "Promotion touchpoint", 200),
+      summary: clampString(`${lead.name || lead.product || "Lead"} • ${touchpoint.name || "Promotion"}`, 5000),
       name: clampString(`${lead.name || lead.product || "Lead"} – ${touchpoint.name || "Promo"}`, 500),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),

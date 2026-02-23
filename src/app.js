@@ -537,7 +537,14 @@ async function renderDashboard() {
     const event = { id: eventDoc.id, ...eventDoc.data() };
     if (!isActiveRecord(event)) return null;
     const contact = event.contactId ? contactById[event.contactId] : null;
-    return { type: "promotion", id: event.id, leadId: event.leadId, title: contact?.name || "Unnamed Contact", subtitle: event.touchpointName || event.name || "Promotion touchpoint", dueAt: event.scheduledFor };
+    return {
+      type: "promotion",
+      id: event.id,
+      leadId: event.leadId,
+      title: contact?.name || "Unnamed Contact",
+      subtitle: event.touchpointName || event.title || event.name || "Promotion touchpoint",
+      dueAt: event.scheduledFor || event.nextActionAt,
+    };
   }).filter(Boolean);
 
   const pushOptionsMarkup = pushPresets.map((preset, index) => `<button type="button" data-push-select="true" data-preset-index="${index}" class="push-option">${escapeHtml(preset.label)}</button>`).join("");

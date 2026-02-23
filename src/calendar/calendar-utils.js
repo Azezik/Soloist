@@ -78,7 +78,7 @@ export function normalizeCalendarItems(tasks, leads, promotionEvents = []) {
 
   const promotionItems = promotionEvents
     .map((event) => {
-      const date = toDate(event.scheduledFor);
+      const date = toDate(event.scheduledFor || event.nextActionAt);
       if (!date) return null;
       return {
         id: event.id,
