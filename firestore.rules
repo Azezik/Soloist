@@ -17,6 +17,12 @@ service cloud.firestore {
         || (request.resource.data[field] is string && request.resource.data[field].size() <= maxLen);
     }
 
+    function validOptionalString(field, maxLen) {
+      return !(field in request.resource.data)
+        || request.resource.data[field] == null
+        || (request.resource.data[field] is string && request.resource.data[field].size() <= maxLen);
+    }
+
     function createdAtImmutable() {
       return !('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt;
     }
@@ -102,7 +108,7 @@ service cloud.firestore {
             && noPrivilegeFields()
             && createdAtImmutable()
             && validString('leadId', 128)
-            && validString('originalStageId', 80);
+            && validOptionalString('originalStageId', 80);
           allow delete: if isSignedInOwner(userId);
         }
       }
@@ -114,8 +120,8 @@ service cloud.firestore {
           && createdAtImmutable()
           && validString('promotionId', 128)
           && validString('leadId', 128)
-          && validString('contactId', 128)
-          && validString('stageId', 80)
+          && validOptionalString('contactId', 128)
+          && validOptionalString('stageId', 80)
           && validString('touchpointId', 128)
           && validString('status', 40)
           && validString('type', 40)
