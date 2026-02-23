@@ -13,6 +13,7 @@ import {
   updateDoc,
   where,
 } from "../data/firestore-service.js";
+import { computeNextActionAt, computeOffsetDeltaDays } from "../domain/settings.js";
 import { computeTouchpointDate, findSnapMatch } from "./snap-engine.js";
 import { toPromotionDate } from "./presets.js";
 
@@ -76,6 +77,72 @@ function toSnapshotTimestamp(value) {
   return parsed ? Timestamp.fromDate(parsed) : null;
 }
 
+function normalizeSelectionSources(selectionSourcesByLead = {}, leadId) {
+  const rawSources = selectionSourcesByLead?.[leadId];
+  if (Array.isArray(rawSources)) return rawSources;
+  if (typeof rawSources === "string" && rawSources) return [rawSources];
+  return [];
+}
+
+function wasAddedViaSnapActive(selectionSourcesByLead = {}, leadId) {
+  return normalizeSelectionSources(selectionSourcesByLead, leadId).includes("snap_active");
+}
+
+function getStageIndexById(pipelineStages = [], stageId = null) {
+  if (!stageId) return -1;
+  return pipelineStages.findIndex((stage) => stage?.id === stageId);
+}
+
+function computeRecalculatedStageTimestamp({
+  pipelineSettings,
+  replacedStageId,
+  replacedStageIndex,
+  previousStageId,
+  anchorTimestamp,
+}) {
+  const anchorDate = toPromotionDate(anchorTimestamp) || new Date();
+  if (!Array.isArray(pipelineSettings?.stages) || !pipelineSettings.stages.length || !replacedStageId) {
+    return Timestamp.fromDate(anchorDate);
+  }
+
+  const stages = pipelineSettings.stages;
+  const index = Number.isInteger(replacedStageIndex) && replacedStageIndex >= 0 ? replacedStageIndex : getStageIndexById(stages, replacedStageId);
+  if (index < 0) return Timestamp.fromDate(anchorDate);
+
+  const fallbackPreviousStageId = index > 0 ? stages[index - 1]?.id || null : null;
+  const sourceStageId = previousStageId || fallbackPreviousStageId || replacedStageId;
+  const deltaDays = Math.max(0, computeOffsetDeltaDays(pipelineSettings, sourceStageId, replacedStageId));
+  return computeNextActionAt(anchorDate, deltaDays, pipelineSettings.dayStartTime);
+}
+
+async function restoreLeadFromPromotionSnapshot({ leadRef, leadData = {}, snapshot = {}, pipelineSettings = null, reason = "" }) {
+  const replacedStageId = snapshot.replacedStageId || snapshot.expectedSnapStageId || null;
+  if (!replacedStageId) return false;
+
+  const recalculatedNextActionAt = computeRecalculatedStageTimestamp({
+    pipelineSettings,
+    replacedStageId,
+    replacedStageIndex: snapshot.replacedStageIndex,
+    previousStageId: snapshot.previousStageId,
+    anchorTimestamp: snapshot.lastCompletedNonPromoStageAt || leadData.lastActionAt,
+  });
+
+  await updateDoc(leadRef, {
+    stageId: replacedStageId,
+    stageStatus: "pending",
+    status: "open",
+    archived: false,
+    nextActionAt: recalculatedNextActionAt,
+    snapMode: deleteField(),
+    snappedPromotionId: deleteField(),
+    snapMetadata: deleteField(),
+    snapTemporaryFlags: deleteField(),
+    updatedAt: serverTimestamp(),
+  });
+
+  return Boolean(reason);
+}
+
 async function createPromotion({
   db,
   userId,
@@ -112,25 +179,51 @@ async function createPromotion({
   }
 
   for (const lead of selectedLeads) {
-    const snapMatch = findSnapMatch(lead, promotion.touchpoints, endDate, snapWindowDays, pipelineStages);
-    if (snapMatch) {
+    const snapEligible = wasAddedViaSnapActive(selectionSourcesByLead, lead.id);
+    const snapMatch = snapEligible ? findSnapMatch(lead, promotion.touchpoints, endDate, snapWindowDays, pipelineStages) : null;
+    if (snapEligible && snapMatch) {
+      const replacedStageIndex = getStageIndexById(pipelineStages, snapMatch.stageId);
+      const previousStageId = replacedStageIndex > 0 ? pipelineStages[replacedStageIndex - 1]?.id || null : null;
       const snapshotPayload = {
         leadId: lead.id,
+        addedViaSnapActive: true,
+        replacedStageId: snapMatch.stageId || null,
+        replacedStageIndex,
+        previousStageId,
         originalStageId: lead.stageId || null,
         originalScheduledDate: toSnapshotTimestamp(lead.nextActionAt),
+        lastCompletedNonPromoStageAt: toSnapshotTimestamp(lead.lastActionAt),
+        completedTouchpointCount: 0,
+        zeroTouchpointsCompleted: true,
+        lastCompletedPromotionTouchpointAt: null,
         snappedAt: serverTimestamp(),
       };
       if (snapMatch.stageId) snapshotPayload.expectedSnapStageId = snapMatch.stageId;
       if (snapMatch.candidateDay) snapshotPayload.expectedSnapScheduledDate = Timestamp.fromDate(new Date(snapMatch.candidateDay));
       try {
         await setDoc(doc(db, "users", userId, "promotions", promotionRef.id, "snapshots", lead.id), snapshotPayload);
+        await updateDoc(doc(db, "users", userId, "leads", lead.id), {
+          snapMetadata: {
+            promotionId: promotionRef.id,
+            replacedStageId: snapMatch.stageId || null,
+            replacedStageIndex,
+            previousStageId,
+            snapWindowDays: Math.max(0, Number(snapWindowDays) || 0),
+            addedViaSnapActive: true,
+          },
+          snappedPromotionId: promotionRef.id,
+          updatedAt: serverTimestamp(),
+        });
       } catch (error) {
         throw permissionError(`promotion snapshot create for lead ${lead.id}`, error);
       }
     }
 
     const leadSnapMode = snapModeByLead?.[lead.id] || null;
-    const events = buildPromotionEvents(promotionRef.id, lead, promotion.touchpoints, endDate, snapMatch?.stageId || null, leadSnapMode);
+    const events = buildPromotionEvents(promotionRef.id, lead, promotion.touchpoints, endDate, snapMatch?.stageId || null, leadSnapMode).map((event) => ({
+      ...event,
+      snapEligible,
+    }));
     for (const event of events) {
       try {
         await addDoc(collection(db, "users", userId, "events"), event);
@@ -148,13 +241,19 @@ async function restoreSnappedLeadsAndDeletePromotion({ db, userId, promotionId }
   const promotionSnapshot = await getDoc(promotionRef);
   if (!promotionSnapshot.exists()) return { existed: false, restoredLeadCount: 0, deletedEvents: 0 };
 
-  const [snapshotDocs, eventDocs] = await Promise.all([
+  const [snapshotDocs, eventDocs, pipelineSettingsSnapshot] = await Promise.all([
     getDocs(collection(db, "users", userId, "promotions", promotionId, "snapshots")),
     getDocs(query(collection(db, "users", userId, "events"), where("promotionId", "==", promotionId))),
+    getDoc(doc(db, "users", userId, "settings", "pipeline")),
   ]);
+  const pipelineSettings = pipelineSettingsSnapshot.exists() ? pipelineSettingsSnapshot.data() : null;
 
   for (const snapshotDoc of snapshotDocs.docs) {
     const snapshot = snapshotDoc.data() || {};
+    if (snapshot.addedViaSnapActive !== true) {
+      await deleteDoc(snapshotDoc.ref);
+      continue;
+    }
     const leadId = snapshot.leadId || snapshotDoc.id;
     if (!leadId) continue;
 
@@ -165,23 +264,14 @@ async function restoreSnappedLeadsAndDeletePromotion({ db, userId, promotionId }
       continue;
     }
 
-    const updates = {
-      updatedAt: serverTimestamp(),
-      snapMode: deleteField(),
-      snappedPromotionId: deleteField(),
-      snapMetadata: deleteField(),
-      snapTemporaryFlags: deleteField(),
-    };
-
-    if (Object.prototype.hasOwnProperty.call(snapshot, "originalStageId")) {
-      updates.stageId = snapshot.originalStageId || null;
-    }
-    if (Object.prototype.hasOwnProperty.call(snapshot, "originalScheduledDate")) {
-      updates.nextActionAt = snapshot.originalScheduledDate || null;
-    }
-
     try {
-      await updateDoc(leadRef, updates);
+      await restoreLeadFromPromotionSnapshot({
+        leadRef,
+        leadData: leadSnapshot.data() || {},
+        snapshot,
+        pipelineSettings,
+        reason: "promotion_deleted",
+      });
       await deleteDoc(snapshotDoc.ref);
     } catch (error) {
       throw deletionError(`lead restoration for ${leadId}`, error);
@@ -209,4 +299,72 @@ async function restoreSnappedLeadsAndDeletePromotion({ db, userId, promotionId }
   };
 }
 
-export { createPromotion, restoreSnappedLeadsAndDeletePromotion };
+async function restoreExpiredPromotionStageReplacements({ db, userId, asOfDate = new Date() }) {
+  const promotionsSnapshot = await getDocs(query(collection(db, "users", userId, "promotions"), where("status", "==", "active")));
+  if (!promotionsSnapshot.size) return 0;
+
+  const pipelineSettingsSnapshot = await getDoc(doc(db, "users", userId, "settings", "pipeline"));
+  const pipelineSettings = pipelineSettingsSnapshot.exists() ? pipelineSettingsSnapshot.data() : null;
+  const restoreStart = new Date(asOfDate);
+  restoreStart.setHours(0, 0, 0, 0);
+
+  let restoredCount = 0;
+
+  for (const promotionDoc of promotionsSnapshot.docs) {
+    const promotion = promotionDoc.data() || {};
+    const endDate = toPromotionDate(promotion.endDate);
+    if (!endDate) continue;
+
+    const touchpoints = Array.isArray(promotion.touchpoints) ? promotion.touchpoints : [];
+    if (!touchpoints.length) continue;
+
+    const lastTouchpointDate = touchpoints.reduce((latest, touchpoint) => {
+      const touchpointDate = computeTouchpointDate(endDate, touchpoint.offsetDays);
+      return !latest || touchpointDate > latest ? touchpointDate : latest;
+    }, null);
+
+    if (!lastTouchpointDate) continue;
+
+    const restoreEligibleDate = new Date(lastTouchpointDate);
+    restoreEligibleDate.setHours(0, 0, 0, 0);
+    restoreEligibleDate.setDate(restoreEligibleDate.getDate() + 1);
+    if (restoreStart.getTime() < restoreEligibleDate.getTime()) continue;
+
+    const snapshots = await getDocs(collection(db, "users", userId, "promotions", promotionDoc.id, "snapshots"));
+    for (const snapshotDoc of snapshots.docs) {
+      const snapshot = snapshotDoc.data() || {};
+      if (snapshot.addedViaSnapActive !== true) continue;
+      if (Number(snapshot.completedTouchpointCount || 0) > 0) continue;
+      if (snapshot.zeroTouchpointsCompleted === false) continue;
+      if (snapshot.restoredAt) continue;
+
+      const leadId = snapshot.leadId || snapshotDoc.id;
+      if (!leadId) continue;
+      const leadRef = doc(db, "users", userId, "leads", leadId);
+      const leadSnapshot = await getDoc(leadRef);
+      if (!leadSnapshot.exists()) {
+        await deleteDoc(snapshotDoc.ref);
+        continue;
+      }
+
+      await restoreLeadFromPromotionSnapshot({
+        leadRef,
+        leadData: leadSnapshot.data() || {},
+        snapshot,
+        pipelineSettings,
+        reason: "promotion_expired_no_touchpoints",
+      });
+
+      await updateDoc(snapshotDoc.ref, {
+        restoredAt: serverTimestamp(),
+        restoreReason: "promotion_expired_no_touchpoints",
+        updatedAt: serverTimestamp(),
+      });
+      restoredCount += 1;
+    }
+  }
+
+  return restoredCount;
+}
+
+export { createPromotion, restoreSnappedLeadsAndDeletePromotion, restoreExpiredPromotionStageReplacements };
