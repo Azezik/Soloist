@@ -210,7 +210,7 @@ function explainFirestoreError(error) {
   if (errorCode === "permission-denied") {
     return [
       "This account is signed in, but Firestore access was denied.",
-      "Update Firebase Firestore Security Rules to allow authenticated users to read and write users/{userId}/contacts, users/{userId}/leads, users/{userId}/tasks, users/{userId}/notes, users/{userId}/promotions, users/{userId}/promotionEvents, users/{userId}/promotions/{promotionId}/snapshots, and users/{userId}/settings/pipeline.",
+      "Update Firebase Firestore Security Rules to allow authenticated users to read and write users/{userId}/contacts, users/{userId}/leads, users/{userId}/tasks, users/{userId}/notes, users/{userId}/promotions, users/{userId}/events, users/{userId}/promotions/{promotionId}/snapshots, and users/{userId}/settings/pipeline.",
     ].join(" ");
   }
 
@@ -498,7 +498,7 @@ async function renderDashboard() {
     ),
     getDocs(
       query(
-        collection(db, "users", currentUser.uid, "promotionEvents"),
+        collection(db, "users", currentUser.uid, "events"),
         where("completed", "==", false),
         where("scheduledFor", "<=", now),
         orderBy("scheduledFor", "asc")
@@ -535,7 +535,7 @@ async function renderDashboard() {
 
   const duePromotions = promoEventsSnapshot.docs.map((eventDoc) => {
     const event = { id: eventDoc.id, ...eventDoc.data() };
-    if (!isActiveRecord(event)) return null;
+    if (!isActiveRecord(event) || event.type !== "promotion") return null;
     const contact = event.contactId ? contactById[event.contactId] : null;
     return {
       type: "promotion",
@@ -612,6 +612,14 @@ async function renderDashboard() {
       const taskId = buttonEl.dataset.taskId;
       if (!taskId) return;
       await updateDoc(doc(db, "users", currentUser.uid, "tasks", taskId), { completed: true, status: "completed", archived: true, updatedAt: serverTimestamp() });
+      await setDoc(doc(db, "users", currentUser.uid, "events", `task_${taskId}`), {
+        type: "task",
+        sourceId: taskId,
+        completed: true,
+        archived: true,
+        status: "completed",
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
       await renderDashboard();
     });
   });
@@ -631,6 +639,12 @@ async function renderDashboard() {
       const pushedAt = computePushedTimestamp(new Date(), preset);
       if (entityType === "task") {
         await updateDoc(doc(db, "users", currentUser.uid, "tasks", entityId), { scheduledFor: pushedAt, updatedAt: serverTimestamp() });
+        await setDoc(doc(db, "users", currentUser.uid, "events", `task_${entityId}`), {
+          type: "task",
+          sourceId: entityId,
+          scheduledFor: pushedAt,
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
       } else {
         if (!leadSource) return;
         await pushLeadFromPreset({ userId: currentUser.uid, entityId, leadSource, preset });
@@ -1112,6 +1126,19 @@ async function renderAddLeadForm() {
       };
 
       const leadDoc = await addDoc(collection(db, "users", currentUser.uid, "leads"), leadPayload);
+      await setDoc(doc(db, "users", currentUser.uid, "events", `lead_${leadDoc.id}`), {
+        type: "lead",
+        sourceId: leadDoc.id,
+        contactId,
+        scheduledFor: computedNextActionAt,
+        nextActionAt: computedNextActionAt,
+        title: leadPayload.title || "Lead",
+        status: leadPayload.status || "open",
+        completed: false,
+        archived: false,
+        deleted: false,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
       if (values.initialNote) {
         await addTimelineNote({
           contactId,
@@ -1142,7 +1169,7 @@ async function renderAddTaskForm() {
     values: {},
     onSubmit: async (values) => {
       const now = Timestamp.now();
-      await addDoc(collection(db, "users", currentUser.uid, "tasks"), {
+      const taskDoc = await addDoc(collection(db, "users", currentUser.uid, "tasks"), {
         ...buildTimelineEventFields("task", {
           contactId: values.contactId,
           status: "open",
@@ -1154,6 +1181,18 @@ async function renderAddTaskForm() {
         createdAt: now,
         updatedAt: serverTimestamp(),
       });
+      await setDoc(doc(db, "users", currentUser.uid, "events", `task_${taskDoc.id}`), {
+        type: "task",
+        sourceId: taskDoc.id,
+        contactId: values.contactId || null,
+        scheduledFor: values.scheduledFor || null,
+        title: values.title || "Untitled Task",
+        status: "open",
+        completed: false,
+        archived: false,
+        deleted: false,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
       window.location.hash = "#tasks";
     },
   });
@@ -1944,7 +1983,7 @@ function renderPlaceholder(title) {
 }
 
 async function markPromotionEventDone(eventId) {
-  const eventRef = doc(db, "users", currentUser.uid, "promotionEvents", eventId);
+  const eventRef = doc(db, "users", currentUser.uid, "events", eventId);
   const eventSnapshot = await getDoc(eventRef);
   if (!eventSnapshot.exists()) return;
 
@@ -1960,7 +1999,7 @@ async function markPromotionEventDone(eventId) {
   });
 
   const siblingSnapshot = await getDocs(
-    query(collection(db, "users", currentUser.uid, "promotionEvents"), where("promotionId", "==", event.promotionId), where("leadId", "==", event.leadId))
+    query(collection(db, "users", currentUser.uid, "events"), where("promotionId", "==", event.promotionId), where("leadId", "==", event.leadId))
   );
   const siblings = siblingSnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
   const remaining = siblings.filter((item) => !item.completed && item.id !== eventId);
@@ -1986,7 +2025,7 @@ async function renderPromotionEventDetail(eventId) {
   const route = routeFromHash();
   const originRoute = getCurrentRouteOrigin(route.params);
 
-  const eventRef = doc(db, "users", currentUser.uid, "promotionEvents", eventId);
+  const eventRef = doc(db, "users", currentUser.uid, "events", eventId);
   const eventSnapshot = await getDoc(eventRef);
   if (!eventSnapshot.exists()) {
     viewContainer.innerHTML = '<p class="view-message">Promotion event not found.</p>';
