@@ -1,4 +1,18 @@
-import { addDoc, collection, doc, serverTimestamp, setDoc, Timestamp } from "../data/firestore-service.js";
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  deleteField,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  serverTimestamp,
+  setDoc,
+  Timestamp,
+  updateDoc,
+  where,
+} from "../data/firestore-service.js";
 import { computeTouchpointDate, findSnapMatch } from "./snap-engine.js";
 import { toPromotionDate } from "./presets.js";
 
@@ -11,6 +25,12 @@ function permissionError(step, error) {
   const message = error?.message || "Unknown Firestore error";
   const code = error?.code ? ` (${error.code})` : "";
   return new Error(`Promotion save failed at ${step}${code}: ${message}`);
+}
+
+function deletionError(step, error) {
+  const message = error?.message || "Unknown Firestore error";
+  const code = error?.code ? ` (${error.code})` : "";
+  return new Error(`Promotion deletion failed at ${step}${code}: ${message}`);
 }
 
 function buildPromotionEvents(promotionId, lead, touchpoints, endDate, snappedStageId = null, snapMode = null) {
@@ -27,8 +47,6 @@ function buildPromotionEvents(promotionId, lead, touchpoints, endDate, snappedSt
       template: touchpoint.template,
       templateConfig: touchpoint.templateConfig || touchpoint.template,
       scheduledFor,
-      // Keep this aligned with lead/task scheduling shape so downstream consumers
-      // that expect nextActionAt-style fields can treat promotion events the same way.
       nextActionAt: scheduledFor,
       completed: false,
       archived: false,
@@ -49,6 +67,13 @@ function buildPromotionEvents(promotionId, lead, touchpoints, endDate, snappedSt
 
     return event;
   });
+}
+
+function toSnapshotTimestamp(value) {
+  if (!value) return null;
+  if (typeof value?.toDate === "function") return value;
+  const parsed = toPromotionDate(value);
+  return parsed ? Timestamp.fromDate(parsed) : null;
 }
 
 async function createPromotion({
@@ -91,10 +116,12 @@ async function createPromotion({
     if (snapMatch) {
       const snapshotPayload = {
         leadId: lead.id,
-        originalScheduledDate: snapMatch.candidateDay ? Timestamp.fromDate(new Date(snapMatch.candidateDay)) : lead.nextActionAt || null,
+        originalStageId: lead.stageId || null,
+        originalScheduledDate: toSnapshotTimestamp(lead.nextActionAt),
         snappedAt: serverTimestamp(),
       };
-      if (snapMatch.stageId) snapshotPayload.originalStageId = snapMatch.stageId;
+      if (snapMatch.stageId) snapshotPayload.expectedSnapStageId = snapMatch.stageId;
+      if (snapMatch.candidateDay) snapshotPayload.expectedSnapScheduledDate = Timestamp.fromDate(new Date(snapMatch.candidateDay));
       try {
         await setDoc(doc(db, "users", userId, "promotions", promotionRef.id, "snapshots", lead.id), snapshotPayload);
       } catch (error) {
@@ -116,4 +143,70 @@ async function createPromotion({
   return promotionRef.id;
 }
 
-export { createPromotion };
+async function restoreSnappedLeadsAndDeletePromotion({ db, userId, promotionId }) {
+  const promotionRef = doc(db, "users", userId, "promotions", promotionId);
+  const promotionSnapshot = await getDoc(promotionRef);
+  if (!promotionSnapshot.exists()) return { existed: false, restoredLeadCount: 0, deletedEvents: 0 };
+
+  const [snapshotDocs, eventDocs] = await Promise.all([
+    getDocs(collection(db, "users", userId, "promotions", promotionId, "snapshots")),
+    getDocs(query(collection(db, "users", userId, "events"), where("promotionId", "==", promotionId))),
+  ]);
+
+  for (const snapshotDoc of snapshotDocs.docs) {
+    const snapshot = snapshotDoc.data() || {};
+    const leadId = snapshot.leadId || snapshotDoc.id;
+    if (!leadId) continue;
+
+    const leadRef = doc(db, "users", userId, "leads", leadId);
+    const leadSnapshot = await getDoc(leadRef);
+    if (!leadSnapshot.exists()) {
+      await deleteDoc(snapshotDoc.ref);
+      continue;
+    }
+
+    const updates = {
+      updatedAt: serverTimestamp(),
+      snapMode: deleteField(),
+      snappedPromotionId: deleteField(),
+      snapMetadata: deleteField(),
+      snapTemporaryFlags: deleteField(),
+    };
+
+    if (Object.prototype.hasOwnProperty.call(snapshot, "originalStageId")) {
+      updates.stageId = snapshot.originalStageId || null;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, "originalScheduledDate")) {
+      updates.nextActionAt = snapshot.originalScheduledDate || null;
+    }
+
+    try {
+      await updateDoc(leadRef, updates);
+      await deleteDoc(snapshotDoc.ref);
+    } catch (error) {
+      throw deletionError(`lead restoration for ${leadId}`, error);
+    }
+  }
+
+  for (const eventDoc of eventDocs.docs) {
+    try {
+      await deleteDoc(eventDoc.ref);
+    } catch (error) {
+      throw deletionError(`promotion event delete ${eventDoc.id}`, error);
+    }
+  }
+
+  try {
+    await deleteDoc(promotionRef);
+  } catch (error) {
+    throw deletionError("promotion document delete", error);
+  }
+
+  return {
+    existed: true,
+    restoredLeadCount: snapshotDocs.size,
+    deletedEvents: eventDocs.size,
+  };
+}
+
+export { createPromotion, restoreSnappedLeadsAndDeletePromotion };

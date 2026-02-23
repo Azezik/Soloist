@@ -419,6 +419,74 @@ select {
   justify-content: space-between;
 }
 
+.crm-view--promotions .panel {
+  padding: 1rem;
+}
+
+.crm-view--promotions .panel h3 {
+  margin-bottom: 0.8rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid var(--crm-divider);
+}
+
+.panel--promo-actions {
+  padding: 0.75rem;
+}
+
+.panel--promo-section {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.promotion-list-grid,
+.promotion-touchpoints-stack,
+.promotion-lead-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.promotion-list-card {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.promotion-list-card h3 {
+  margin: 0;
+}
+
+.panel--promo-summary {
+  gap: 0.65rem;
+}
+
+.promotion-config-panel {
+  gap: 0.85rem;
+}
+
+.promotion-config-panel > h3 {
+  margin: 0.35rem 0 0;
+}
+
+.promotion-group-actions {
+  flex-wrap: wrap;
+}
+
+.promotion-group-actions .secondary-btn {
+  min-height: 42px;
+}
+
+.promotion-submit-row {
+  margin-top: 1.1rem;
+}
+
+.danger-btn {
+  border-color: #ff7676;
+  color: #ffd5d5;
+}
+
+.danger-btn:hover {
+  background-color: rgba(255, 118, 118, 0.2);
+}
+
 .filters-grid {
   margin-bottom: 1rem;
 }
