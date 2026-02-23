@@ -2235,48 +2235,101 @@ function renderPromotionCreateFlow({ snapWindowDays, leads, promotions = [] }) {
       return;
     }
 
-    const promotionConfig = { name: state.name, endDate: state.endDate, touchpoints: state.touchpoints, targeting: state.targeting };
-    const targetLeads = computeTargetLeads({ leads, promotion: promotionConfig, snapWindowDays, searchText: state.searchText });
+    const syncPage2StateFromInputs = () => {
+      state.name = document.getElementById("promo-name-edit")?.value || state.name;
+      state.endDate = document.getElementById("promo-end-edit")?.value || state.endDate;
+      state.touchpoints = syncPromotionTouchpointsFromForm(state.touchpoints);
+    };
+
+    const getTargetLeads = () => {
+      const promotionConfig = { name: state.name, endDate: state.endDate, touchpoints: state.touchpoints, targeting: state.targeting };
+      return computeTargetLeads({ leads, promotion: promotionConfig, snapWindowDays, searchText: state.searchText });
+    };
+
+    const targetLeads = getTargetLeads();
     if (!state.selectedLeadIds.size) targetLeads.forEach((lead) => state.selectedLeadIds.add(lead.id));
 
-    viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>Promotion Setup</h2></div><div class="panel form-grid"><h3>Basic Info</h3><label>Promo Name<input id="promo-name-edit" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-edit" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><h3>Touchpoints</h3><div id="touchpoint-list">${state.touchpoints.map((tp, index) => buildPromotionTouchpointMarkup(tp, index)).join("")}</div><button id="add-touchpoint-btn" class="secondary-btn" type="button">Add Touchpoint</button><h3>Targeting Strategy</h3><div class="promo-targeting">${TARGETING_OPTIONS.map((option) => `<button type="button" class="secondary-btn ${state.targeting.includes(option.id) ? "is-active" : ""}" data-targeting-id="${option.id}">${option.label}</button>`).join("")}</div><label>Custom Search<input id="promo-search" value="${escapeHtml(state.searchText)}" placeholder="Name or product" /></label><label><input type="checkbox" id="promo-select-all" checked /> Select All</label><div class="lead-list">${targetLeads.map((lead) => `<article class="panel panel--lead"><label><input type="checkbox" data-target-lead-id="${lead.id}" ${state.selectedLeadIds.has(lead.id) ? "checked" : ""} /> ${escapeHtml(lead.name || "Unnamed")}</label><p>${escapeHtml(lead.product || "No product")}</p><small>${qualifiesForSnap(lead, state.touchpoints, new Date(state.endDate), snapWindowDays) ? "Snap Active" : isLeadDropOutState(lead) ? "Drop-Out" : "Active"}</small></article>`).join("")}</div><button id="create-promo-btn" type="button">Create Promo</button></div></section>`;
+    viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>Promotion Setup</h2></div><div class="panel form-grid"><h3>Basic Info</h3><label>Promo Name<input id="promo-name-edit" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-edit" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><h3>Touchpoints</h3><div id="touchpoint-list">${state.touchpoints.map((tp, index) => buildPromotionTouchpointMarkup(tp, index)).join("")}</div><button id="add-touchpoint-btn" class="secondary-btn" type="button">Add Touchpoint</button><h3>Targeting Strategy</h3><div class="promo-targeting">${TARGETING_OPTIONS.map((option) => `<button type="button" class="secondary-btn ${state.targeting.includes(option.id) ? "is-active" : ""}" data-targeting-id="${option.id}">${option.label}</button>`).join("")}</div><label>Custom Search<input id="promo-search" value="${escapeHtml(state.searchText)}" placeholder="Name or product" /></label><label><input type="checkbox" id="promo-select-all" /> Select All</label><div id="promo-lead-list" class="lead-list"></div><button id="create-promo-btn" type="button">Create Promo</button></div></section>`;
+
+    const leadListEl = document.getElementById("promo-lead-list");
+    const selectAllEl = document.getElementById("promo-select-all");
+
+    const renderLeadList = () => {
+      const visibleTargetLeads = getTargetLeads();
+      if (!leadListEl || !selectAllEl) return;
+
+      if (!state.selectedLeadIds.size) {
+        visibleTargetLeads.forEach((lead) => state.selectedLeadIds.add(lead.id));
+      }
+
+      if (!visibleTargetLeads.length) {
+        const dropOutOnly = state.targeting.length === 1 && state.targeting.includes("drop_out");
+        leadListEl.innerHTML = `<article class="panel panel--lead"><p>${dropOutOnly ? "No dropped-off leads are currently available." : "No leads match the current targeting and search filters."}</p></article>`;
+      } else {
+        leadListEl.innerHTML = visibleTargetLeads
+          .map(
+            (lead) => `<article class="panel panel--lead"><label><input type="checkbox" data-target-lead-id="${lead.id}" ${state.selectedLeadIds.has(lead.id) ? "checked" : ""} /> ${escapeHtml(lead.name || "Unnamed")}</label><p>${escapeHtml(lead.product || "No product")}</p><small>${qualifiesForSnap(lead, state.touchpoints, new Date(state.endDate), snapWindowDays) ? "Snap Active" : isLeadDropOutState(lead) ? "Drop-Out" : "Active"}</small></article>`,
+          )
+          .join("");
+      }
+
+      const selectedCount = visibleTargetLeads.filter((lead) => state.selectedLeadIds.has(lead.id)).length;
+      selectAllEl.checked = visibleTargetLeads.length > 0 && selectedCount === visibleTargetLeads.length;
+      selectAllEl.indeterminate = selectedCount > 0 && selectedCount < visibleTargetLeads.length;
+
+      leadListEl.querySelectorAll("[data-target-lead-id]").forEach((inputEl) => {
+        inputEl.addEventListener("change", () => {
+          const leadId = inputEl.dataset.targetLeadId;
+          if (!leadId) return;
+          if (inputEl.checked) state.selectedLeadIds.add(leadId);
+          else state.selectedLeadIds.delete(leadId);
+          renderLeadList();
+        });
+      });
+    };
+
+    renderLeadList();
 
     document.getElementById("add-touchpoint-btn")?.addEventListener("click", () => {
+      syncPage2StateFromInputs();
       state.touchpoints.push(buildPromotionTouchpointState({ order: state.touchpoints.length, offsetDays: 0 }, state.touchpoints.length));
       draw();
     });
 
+    document.getElementById("promo-name-edit")?.addEventListener("input", (event) => {
+      state.name = String(event.target.value || "");
+    });
+
+    document.getElementById("promo-end-edit")?.addEventListener("input", (event) => {
+      state.endDate = String(event.target.value || "");
+      renderLeadList();
+    });
+
     document.querySelectorAll("[data-targeting-id]").forEach((buttonEl) => {
       buttonEl.addEventListener("click", () => {
+        syncPage2StateFromInputs();
         const id = buttonEl.dataset.targetingId;
         if (!id) return;
         if (state.targeting.includes(id)) state.targeting = state.targeting.filter((entry) => entry !== id);
         else state.targeting.push(id);
-        draw();
+        buttonEl.classList.toggle("is-active", state.targeting.includes(id));
+        renderLeadList();
       });
     });
 
     document.getElementById("promo-search")?.addEventListener("input", (event) => {
       state.searchText = String(event.target.value || "");
-      draw();
+      renderLeadList();
     });
 
     document.getElementById("promo-select-all")?.addEventListener("change", (event) => {
+      const visibleTargetLeads = getTargetLeads();
       const selected = event.target.checked;
-      targetLeads.forEach((lead) => {
+      visibleTargetLeads.forEach((lead) => {
         if (selected) state.selectedLeadIds.add(lead.id);
         else state.selectedLeadIds.delete(lead.id);
       });
-      draw();
-    });
-
-    document.querySelectorAll("[data-target-lead-id]").forEach((inputEl) => {
-      inputEl.addEventListener("change", () => {
-        const leadId = inputEl.dataset.targetLeadId;
-        if (!leadId) return;
-        if (inputEl.checked) state.selectedLeadIds.add(leadId);
-        else state.selectedLeadIds.delete(leadId);
-      });
+      renderLeadList();
     });
 
     document.getElementById("create-promo-btn")?.addEventListener("click", async () => {
