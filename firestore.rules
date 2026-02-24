@@ -94,6 +94,18 @@ service cloud.firestore {
         allow create, update: if ownerCreateUpdate(userId);
         allow delete: if ownerDelete(userId);
 
+        match /touchpoints/{touchpointId} {
+          allow read: if ownerRead(userId);
+          allow create, update: if ownerCreateUpdate(userId);
+          allow delete: if ownerDelete(userId);
+
+          match /statuses/{statusId} {
+            allow read: if ownerRead(userId);
+            allow create, update: if ownerCreateUpdate(userId);
+            allow delete: if ownerDelete(userId);
+          }
+        }
+
         match /snapshots/{snapshotId} {
           allow read: if ownerRead(userId);
           allow create, update: if ownerCreateUpdate(userId);
