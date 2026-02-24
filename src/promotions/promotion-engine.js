@@ -93,6 +93,50 @@ function getStageIndexById(pipelineStages = [], stageId = null) {
   return pipelineStages.findIndex((stage) => stage?.id === stageId);
 }
 
+function computePipelineSettingsHash(pipelineSettings = null) {
+  if (!pipelineSettings || typeof pipelineSettings !== "object") return "";
+  const canonicalPayload = {
+    stages: Array.isArray(pipelineSettings?.stages)
+      ? pipelineSettings.stages.map((stage) => ({
+          id: stage?.id || "",
+          offsetDays: Number(stage?.offsetDays) || 0,
+        }))
+      : [],
+  };
+  const serialized = JSON.stringify(canonicalPayload);
+  let hash = 0;
+  for (let index = 0; index < serialized.length; index += 1) {
+    hash = (hash << 5) - hash + serialized.charCodeAt(index);
+    hash |= 0;
+  }
+  return String(hash);
+}
+
+function isDevMode() {
+  if (typeof window === "undefined") return false;
+  const host = String(window.location?.hostname || "").toLowerCase();
+  return host === "localhost" || host === "127.0.0.1";
+}
+
+function logRestoreDecision({
+  leadId,
+  promotionId,
+  shouldRecompute,
+  leadLastActionAt,
+  prePromoLastActionAt,
+  pipelineHashMismatch,
+}) {
+  if (!isDevMode()) return;
+  console.info("[promotion-restore-decision]", {
+    leadId,
+    promotionId,
+    shouldRecompute,
+    leadLastActionAt: leadLastActionAt || null,
+    prePromoLastActionAt: prePromoLastActionAt || null,
+    pipelineHashMismatch: Boolean(pipelineHashMismatch),
+  });
+}
+
 function computeRecalculatedStageTimestamp({
   pipelineSettings,
   replacedStageId,
@@ -119,6 +163,22 @@ async function restoreLeadFromPromotionSnapshot({ leadRef, leadData = {}, snapsh
   const replacedStageId = snapshot.replacedStageId || snapshot.expectedSnapStageId || null;
   if (!replacedStageId) return false;
 
+  const leadLastActionAtDate = toPromotionDate(leadData.lastActionAt);
+  const prePromoLastActionAtDate = toPromotionDate(snapshot.prePromoLastActionAt);
+  const prePromoNextActionAt = toSnapshotTimestamp(snapshot.prePromoNextActionAt);
+
+  const currentPipelineHash = computePipelineSettingsHash(pipelineSettings);
+  const snapshotPipelineHash = String(snapshot.prePromoPipelineHash || "");
+  const pipelineHashMismatch = Boolean(snapshotPipelineHash) && currentPipelineHash !== snapshotPipelineHash;
+
+  const nonPromoAnchorDriftDetected =
+    leadLastActionAtDate &&
+    prePromoLastActionAtDate &&
+    leadLastActionAtDate.getTime() > prePromoLastActionAtDate.getTime() &&
+    String(leadData.lastActionSource || "") !== "promotion_touchpoint";
+
+  const shouldRecompute = pipelineHashMismatch || nonPromoAnchorDriftDetected || !prePromoNextActionAt;
+
   const recalculatedNextActionAt = computeRecalculatedStageTimestamp({
     pipelineSettings,
     replacedStageId,
@@ -127,12 +187,21 @@ async function restoreLeadFromPromotionSnapshot({ leadRef, leadData = {}, snapsh
     anchorTimestamp: snapshot.lastCompletedNonPromoStageAt || leadData.lastActionAt,
   });
 
+  logRestoreDecision({
+    leadId: snapshot.leadId || null,
+    promotionId: snapshot.promotionId || leadData.snappedPromotionId || null,
+    shouldRecompute,
+    leadLastActionAt: leadLastActionAtDate?.toISOString?.() || null,
+    prePromoLastActionAt: prePromoLastActionAtDate?.toISOString?.() || null,
+    pipelineHashMismatch,
+  });
+
   await updateDoc(leadRef, {
     stageId: replacedStageId,
     stageStatus: "pending",
     status: "open",
     archived: false,
-    nextActionAt: recalculatedNextActionAt,
+    nextActionAt: shouldRecompute ? recalculatedNextActionAt : prePromoNextActionAt,
     snapMode: deleteField(),
     snappedPromotionId: deleteField(),
     snapMetadata: deleteField(),
@@ -178,6 +247,8 @@ async function createPromotion({
     throw permissionError("promotion document create", error);
   }
 
+  const pipelineSettingsHash = computePipelineSettingsHash({ stages: pipelineStages });
+
   for (const lead of selectedLeads) {
     const snapEligible = wasAddedViaSnapActive(selectionSourcesByLead, lead.id);
     const snapMatch = snapEligible ? findSnapMatch(lead, promotion.touchpoints, endDate, snapWindowDays, pipelineStages) : null;
@@ -186,6 +257,7 @@ async function createPromotion({
       const previousStageId = replacedStageIndex > 0 ? pipelineStages[replacedStageIndex - 1]?.id || null : null;
       const snapshotPayload = {
         leadId: lead.id,
+        promotionId: promotionRef.id,
         addedViaSnapActive: true,
         replacedStageId: snapMatch.stageId || null,
         replacedStageIndex,
@@ -196,6 +268,11 @@ async function createPromotion({
         completedTouchpointCount: 0,
         zeroTouchpointsCompleted: true,
         lastCompletedPromotionTouchpointAt: null,
+        prePromoStageId: snapMatch.stageId || null,
+        prePromoNextActionAt: toSnapshotTimestamp(lead.nextActionAt),
+        prePromoLastActionAt: toSnapshotTimestamp(lead.lastActionAt),
+        prePromoCreatedAt: serverTimestamp(),
+        prePromoPipelineHash: pipelineSettingsHash,
         snappedAt: serverTimestamp(),
       };
       if (snapMatch.stageId) snapshotPayload.expectedSnapStageId = snapMatch.stageId;

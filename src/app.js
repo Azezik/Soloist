@@ -319,7 +319,7 @@ const LEAD_STATE_FILTERS = [
   { value: "drop_out", label: "Drop Out" },
 ];
 
-async function completeLeadStage({ userId, leadRef, lead, leadSource, pipelineSettings, completedAt = new Date() }) {
+async function completeLeadStage({ userId, leadRef, lead, leadSource, pipelineSettings, completedAt = new Date(), actionSource = "non_promo" }) {
   const nowDate = completedAt instanceof Date ? completedAt : new Date(completedAt);
   const currentStageId = lead.stageId || pipelineSettings.stages[0]?.id;
   const nextStage = getNextStage(pipelineSettings, currentStageId);
@@ -330,6 +330,7 @@ async function completeLeadStage({ userId, leadRef, lead, leadSource, pipelineSe
       archived: true,
       nextActionAt: null,
       lastActionAt: Timestamp.fromDate(nowDate),
+      lastActionSource: actionSource,
       updatedAt: serverTimestamp(),
     };
     if (leadSource === "leads") {
@@ -349,6 +350,7 @@ async function completeLeadStage({ userId, leadRef, lead, leadSource, pipelineSe
     stageId: nextStage.id,
     ...(leadSource === "leads" ? { stageStatus: "pending", status: "open", archived: false } : {}),
     lastActionAt: Timestamp.fromDate(nowDate),
+    lastActionSource: actionSource,
     nextActionAt,
     updatedAt: serverTimestamp(),
   });
@@ -2029,6 +2031,7 @@ async function reconcilePromotionLeadProgress(event, eventId) {
         leadSource: "leads",
         pipelineSettings,
         completedAt,
+        actionSource: "promotion_touchpoint",
       });
 
       if (snapshotDoc.exists()) {

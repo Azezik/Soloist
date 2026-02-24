@@ -53,6 +53,7 @@ export async function rescheduleLeadAction(currentUserId, leadId, nextDate) {
   await updateDoc(leadRef, {
     nextActionAt: Timestamp.fromDate(nextDate),
     lastActionAt: Timestamp.now(),
+    lastActionSource: "schedule_adjustment",
     updatedAt: serverTimestamp(),
   });
 
