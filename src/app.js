@@ -2307,16 +2307,23 @@ async function renderPromotionEventDetail(eventId) {
 
     const templateConfig = normalizePromotionTemplateConfig(touchpoint.templateConfig || touchpoint.template || event.templateConfig || {});
 
-    const rowsMarkup = leadIds.map((leadId) => {
+    const leadCards = leadIds.map((leadId) => {
       const lead = leadsById[leadId] || {};
       const contact = contactsById[lead.contactId] || {};
       const name = contact.name || lead.name || "Unnamed";
       const mailBody = renderTemplateWithLead(templateConfig, name).trim();
       const mailTo = String(contact.email || "").trim();
       const status = statusesByLeadId[leadId] || {};
-      const stateLabel = status.status === "skipped" ? "Skipped" : status.completed ? "Done" : "Open";
-      return `<tr><td>${escapeHtml(name)}</td><td>${escapeHtml(lead.product || "-")}</td><td>${escapeHtml(stateLabel)}</td><td><div class="button-row"><button type="button" class="secondary-btn" data-promo-open-mail="${leadId}" ${mailTo ? `data-mail-to="${escapeHtml(mailTo)}"` : "disabled"} data-mail-subject="${escapeHtml(templateConfig.subjectText || "")}" data-mail-body="${escapeHtml(mailBody)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(mailBody)}">Copy</button>${lead.id ? `<a class="secondary-btn" href="#lead/${encodeURIComponent(lead.id)}">Open Lead</a>` : ""}<button type="button" class="secondary-btn" data-promo-touchpoint-done="${leadId}" ${status.completed || status.status === "skipped" ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-promo-touchpoint-skip="${leadId}" ${status.completed || status.status === "skipped" ? "disabled" : ""}>Skip</button></div></td></tr>`;
-    }).join("") || '<tr><td colspan="4">No leads in this touchpoint.</td></tr>';
+      const isCompleted = status.completed || status.status === "completed" || status.status === "skipped";
+      const stateLabel = status.status === "skipped" ? "Skipped" : isCompleted ? "Done" : "Open";
+      return {
+        isCompleted,
+        markup: `<article class="promo-touchpoint-lead-card panel panel--lead ${isCompleted ? "promo-touchpoint-lead-card--completed" : ""}" ${lead.id ? `data-promo-lead-card="${escapeHtml(lead.id)}" tabindex="0" role="button"` : ""}><div class="promo-touchpoint-lead-meta"><p class="promo-touchpoint-lead-name">${escapeHtml(name)}</p><p class="promo-touchpoint-lead-detail">${escapeHtml(lead.product || "No product")}</p><p class="promo-touchpoint-lead-status">Status: ${escapeHtml(stateLabel)}</p></div><div class="promo-touchpoint-lead-actions" aria-label="Lead actions"><div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-promo-open-mail="${leadId}" ${mailTo ? `data-mail-to="${escapeHtml(mailTo)}"` : "disabled"} data-mail-subject="${escapeHtml(templateConfig.subjectText || "")}" data-mail-body="${escapeHtml(mailBody)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(mailBody)}">Copy</button></div><div class="promo-touchpoint-action-divider" aria-hidden="true"></div><div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-promo-touchpoint-done="${leadId}" ${isCompleted ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-promo-touchpoint-skip="${leadId}" ${isCompleted ? "disabled" : ""}>Skip</button></div></div></article>`
+      };
+    });
+
+    const activeLeadMarkup = leadCards.filter((entry) => !entry.isCompleted).map((entry) => entry.markup).join("");
+    const completedLeadMarkup = leadCards.filter((entry) => entry.isCompleted).map((entry) => entry.markup).join("");
 
     const mailPreview = renderTemplateWithLead(templateConfig, "").trim();
 
@@ -2335,13 +2342,44 @@ async function renderPromotionEventDetail(eventId) {
         </div>
         <div class="panel panel--lead notes-panel">
           <label class="full-width">Template Preview<textarea rows="5" readonly>${escapeHtml(mailPreview)}</textarea></label>
-          <div class="table-wrap"><table><thead><tr><th>Lead</th><th>Product</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rowsMarkup}</tbody></table></div>
+          <div class="promo-touchpoint-leads-wrap">
+            <div class="promo-touchpoint-lead-section">
+              <h3>Active</h3>
+              <div class="promo-touchpoint-lead-list">${activeLeadMarkup || '<p class="view-message">No active leads in this touchpoint.</p>'}</div>
+            </div>
+            <div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed">
+              <h3>Completed</h3>
+              <div class="promo-touchpoint-lead-list">${completedLeadMarkup || '<p class="view-message">No completed leads yet.</p>'}</div>
+            </div>
+          </div>
         </div>
       </section>
     `;
 
     document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
       window.location.hash = originRoute || "#dashboard";
+    });
+
+    document.querySelectorAll("[data-promo-lead-card]").forEach((cardEl) => {
+      const leadId = cardEl.dataset.promoLeadCard;
+      if (!leadId) return;
+      const openLead = () => {
+        window.location.hash = appendOriginToHash(`#lead/${encodeURIComponent(leadId)}`, originRoute);
+      };
+      cardEl.addEventListener("click", () => {
+        openLead();
+      });
+      cardEl.addEventListener("keydown", (keyboardEvent) => {
+        if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") return;
+        keyboardEvent.preventDefault();
+        openLead();
+      });
+    });
+
+    document.querySelectorAll(".promo-touchpoint-lead-actions button").forEach((buttonEl) => {
+      buttonEl.addEventListener("click", (clickEvent) => {
+        clickEvent.stopPropagation();
+      });
     });
 
     document.querySelectorAll("[data-promo-open-mail]").forEach((buttonEl) => {
