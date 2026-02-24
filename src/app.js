@@ -2762,14 +2762,25 @@ function syncPromotionTouchpointsFromForm(touchpoints = []) {
   });
 }
 
-function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipelineDayStartTime = "09:00", leads, promotions = [], existingPromotion = null }) {
+function buildPromotionWizardTouchpointMarkup(touchpoint, index) {
+  const template = normalizePromotionTemplateConfig(touchpoint.templateConfig || touchpoint.template || {});
+  const touchpointLabel = index === 0 ? "Primary message" : `Reminder ${index}`;
+  return `<div class="panel detail-grid"><p><strong>${escapeHtml(touchpointLabel)}</strong></p><label>Send this message <input type="number" min="0" data-touchpoint-offset="${index}" value="${touchpoint.offsetDays}" /> days before the promotion ends.</label><label>Subject<input data-touchpoint-subject="${index}" value="${escapeHtml(template.subjectText)}" /></label><label>Intro<input data-touchpoint-intro="${index}" value="${escapeHtml(template.introText)}" /></label><label class="template-checkbox-row"><input type="checkbox" data-touchpoint-populate-name="${index}" ${template.populateName ? "checked" : ""} /><span>Populate name</span></label><label>Body<textarea rows="4" data-touchpoint-body="${index}">${escapeHtml(template.bodyText)}</textarea></label><label>Outro<input data-touchpoint-outro="${index}" value="${escapeHtml(template.outroText)}" /></label></div>`;
+}
+
+function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipelineDayStartTime = "09:00", leads, existingPromotion = null }) {
+  const DEFAULT_PROMO_TIME = "08:30";
+  const DEFAULT_TOUCHPOINT_OFFSET = 2;
+
   const state = {
-    page: 1,
+    mode: existingPromotion?.id ? "advanced" : "wizard",
+    wizardStep: 1,
+    showTimeEditor: false,
     isEdit: Boolean(existingPromotion?.id),
     editingPromotionId: existingPromotion?.id || null,
     name: existingPromotion?.name || "",
     endDate: existingPromotion ? toDateTimeLocalInputValue(existingPromotion.endDate) : "",
-    presetKey: existingPromotion?.presetKey || "",
+    presetKey: existingPromotion?.presetKey || "custom",
     touchpoints: (existingPromotion?.touchpoints || []).map((touchpoint, index) => buildPromotionTouchpointState(touchpoint, index)),
     cohortDraftLeadIds: new Set(existingPromotion?.leadIds || []),
     searchText: "",
@@ -2779,17 +2790,31 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipeli
     snapMatchByLead: { ...(existingPromotion?.snapMatchByLead || {}) },
   };
 
-  if (state.isEdit) state.page = 2;
+  const ensureDefaultTouchpoints = () => {
+    if (!state.touchpoints.length) {
+      state.touchpoints = [buildPromotionTouchpointState({ offsetDays: DEFAULT_TOUCHPOINT_OFFSET, order: 0 }, 0)];
+    }
+  };
 
-  const recentPresets = promotions
-    .filter((promotion) => promotion?.configSnapshot)
-    .sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0))
-    .map((promotion) => ({
-      id: promotion.id,
-      name: promotion.name || "Untitled promo",
-      createdAt: toDate(promotion.createdAt),
-      configSnapshot: promotion.configSnapshot,
-    }));
+  const ensureDefaultTime = () => {
+    if (!state.endDate) return;
+    if (!state.endDate.includes("T")) {
+      state.endDate = `${state.endDate}T${DEFAULT_PROMO_TIME}`;
+      return;
+    }
+    const [datePart, timePart] = state.endDate.split("T");
+    if (!timePart) state.endDate = `${datePart}T${DEFAULT_PROMO_TIME}`;
+  };
+
+  const setEndDateFromDateInput = (rawDate) => {
+    const datePart = String(rawDate || "").trim();
+    if (!datePart) {
+      state.endDate = "";
+      return;
+    }
+    const existingTime = state.endDate.includes("T") ? state.endDate.split("T")[1] : "";
+    state.endDate = `${datePart}T${existingTime || DEFAULT_PROMO_TIME}`;
+  };
 
   const addLeadsToCohort = (leadList, sourceKey) => {
     leadList.forEach((lead) => {
@@ -2801,41 +2826,178 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipeli
     });
   };
 
+  const applyDefaultCohortSelection = () => {
+    if (state.isEdit || state.cohortDraftLeadIds.size) return;
+    addLeadsToCohort(leads.filter((lead) => isLeadActive(lead)), "all_active");
+    const endDate = toPromotionDate(state.endDate);
+    if (!endDate) return;
+    leads
+      .map((lead) => ({ lead, match: findSnapMatch(lead, state.touchpoints, endDate, snapWindowDays, pipelineStages) }))
+      .filter((entry) => entry.match)
+      .forEach((entry) => {
+        addLeadsToCohort([entry.lead], "snap_active");
+        state.snapMatchByLead[entry.lead.id] = entry.match;
+      });
+  };
+
+  ensureDefaultTouchpoints();
+  ensureDefaultTime();
+  applyDefaultCohortSelection();
+
+  const syncFromAdvancedForm = () => {
+    state.name = document.getElementById("promo-name-edit")?.value || state.name;
+    state.endDate = document.getElementById("promo-end-edit")?.value || state.endDate;
+    state.touchpoints = syncPromotionTouchpointsFromForm(state.touchpoints);
+  };
+
+  const syncFromWizardBasics = () => {
+    state.name = document.getElementById("promo-name")?.value || state.name;
+    setEndDateFromDateInput(document.getElementById("promo-end-date")?.value || "");
+    if (state.showTimeEditor) {
+      const explicitDateTime = document.getElementById("promo-end-time-edit")?.value || "";
+      if (explicitDateTime) state.endDate = explicitDateTime;
+    }
+    ensureDefaultTime();
+  };
+
+  const syncFromWizardTouchpoints = () => {
+    state.touchpoints = syncPromotionTouchpointsFromForm(state.touchpoints).map((touchpoint, index) => ({
+      ...touchpoint,
+      name: touchpoint.name || `Touchpoint ${index + 1}`,
+      order: index,
+    }));
+  };
+
+  const savePromotion = async () => {
+    const selectedLeads = leads.filter((lead) => state.cohortDraftLeadIds.has(lead.id));
+    if (!selectedLeads.length) return alert("Please select at least one lead.");
+
+    try {
+      if (state.isEdit && state.editingPromotionId) {
+        const touchpointsPayload = buildPromotionTouchpoints(state.touchpoints);
+        const leadIdsPayload = selectedLeads.map((lead) => lead.id);
+        await updateDoc(doc(db, "users", currentUser.uid, "promotions", state.editingPromotionId), {
+          name: state.name,
+          endDate: Timestamp.fromDate(new Date(state.endDate)),
+          touchpoints: touchpointsPayload,
+          leadIds: leadIdsPayload,
+          selectionSourcesByLead: state.selectionSourcesByLead,
+          snapModeByLead: state.snapModeByLead,
+          snapMatchByLead: state.snapMatchByLead,
+          updatedAt: serverTimestamp(),
+        });
+        await syncPromotionTouchpointContainers({
+          db,
+          userId: currentUser.uid,
+          promotionId: state.editingPromotionId,
+          promotion: {
+            name: state.name,
+            endDate: state.endDate,
+            touchpoints: touchpointsPayload,
+            leadIds: leadIdsPayload,
+          },
+        });
+        await syncSnappedLeadPromotionPause({
+          db,
+          userId: currentUser.uid,
+          promotionId: state.editingPromotionId,
+          endDate: state.endDate,
+          pipelineDayStartTime,
+        });
+        await renderPromotionDetail(state.editingPromotionId);
+        return;
+      }
+
+      await createPromotion({
+        db,
+        userId: currentUser.uid,
+        promotion: {
+          name: state.name,
+          endDate: state.endDate,
+          touchpoints: buildPromotionTouchpoints(state.touchpoints),
+          targeting: Object.keys(state.selectionSourcesByLead),
+          presetKey: state.presetKey,
+        },
+        selectedLeads,
+        snapWindowDays,
+        pipelineStages,
+        pipelineDayStartTime,
+        presetLabel: PROMOTION_PRESETS[state.presetKey]?.label || "Custom",
+        snapModeByLead: state.snapModeByLead,
+        selectionSourcesByLead: state.selectionSourcesByLead,
+        snapMatchByLead: state.snapMatchByLead,
+      });
+
+      await renderPromotionsPage();
+    } catch (error) {
+      console.error("Failed to save promotion", error);
+      alert(`Could not save promotion: ${error?.message || "Unknown error"}`);
+    }
+  };
+
   const draw = () => {
-    if (state.page === 1) {
-      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Promotion</h2></div><div class="panel form-grid promotion-config-panel"><label>Promo Name<input id="promo-name" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-date" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><p><strong>Presets (Required Selection)</strong></p><div class="promo-presets">${Object.values(PROMOTION_PRESETS).map((preset) => `<button type="button" class="secondary-btn full-width ${state.presetKey === preset.key ? "is-active" : ""}" data-preset-key="${preset.key}">${preset.label}</button>`).join("")}</div><p><strong>Recent Presets</strong></p><div class="promo-presets">${recentPresets.map((preset, index) => `<button type="button" class="secondary-btn full-width" data-recent-preset-index="${index}"><span>${escapeHtml(preset.name)}</span>${preset.createdAt ? `<small>${escapeHtml(preset.createdAt.toLocaleString())}</small>` : ""}</button>`).join("")}</div><button id="promo-continue-btn" type="button">Continue</button></div></section>`;
+    if (state.mode === "wizard") {
+      if (state.wizardStep === 1) {
+        const dateOnlyValue = state.endDate ? String(state.endDate).split("T")[0] : "";
+        viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Promotion</h2></div><div class="panel form-grid promotion-config-panel"><p>Please name your promotion.</p><label>Promo Name<input id="promo-name" value="${escapeHtml(state.name)}" /></label><p>When does it end?</p><label>End Date<input id="promo-end-date" type="date" value="${escapeHtml(dateOnlyValue)}" /></label><button type="button" class="link-btn" id="edit-promo-time-btn">${state.showTimeEditor ? "Hide time" : "Edit time"}</button>${state.showTimeEditor ? `<label>End Time<input id="promo-end-time-edit" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label>` : ""}<div class="button-row promotion-submit-row"><button id="promo-next-basics-btn" type="button">Next</button></div><button type="button" id="open-custom-from-page1" class="link-btn">Create a custom promotion</button></div></section>`;
 
-      document.querySelectorAll("[data-preset-key]").forEach((buttonEl) => {
-        buttonEl.addEventListener("click", () => {
-          state.name = document.getElementById("promo-name")?.value || state.name;
-          state.endDate = document.getElementById("promo-end-date")?.value || state.endDate;
-          state.presetKey = buttonEl.dataset.presetKey || "custom";
-          const preset = PROMOTION_PRESETS[state.presetKey] || PROMOTION_PRESETS.custom;
-          state.touchpoints = preset.touchpoints.map((offset, index) => buildPromotionTouchpointState({ offsetDays: offset, order: index }, index));
+        document.getElementById("edit-promo-time-btn")?.addEventListener("click", () => {
+          syncFromWizardBasics();
+          state.showTimeEditor = !state.showTimeEditor;
           draw();
         });
-      });
 
-      document.querySelectorAll("[data-recent-preset-index]").forEach((buttonEl) => {
-        buttonEl.addEventListener("click", () => {
-          const presetIndex = Number.parseInt(buttonEl.dataset.recentPresetIndex || "", 10);
-          const selectedPreset = recentPresets[presetIndex];
-          if (!selectedPreset) return;
-          const snapshot = selectedPreset.configSnapshot || {};
-          state.name = snapshot.name || selectedPreset.name;
-          state.endDate = toDateTimeLocalInputValue(snapshot.endDate);
-          state.presetKey = snapshot.presetKey || "custom";
-          state.touchpoints = (snapshot.touchpoints || []).map((touchpoint, index) => buildPromotionTouchpointState(touchpoint, index));
-          state.page = 2;
+        document.getElementById("promo-next-basics-btn")?.addEventListener("click", () => {
+          syncFromWizardBasics();
+          if (!state.name.trim() || !state.endDate) return alert("Name and end date are required.");
+          state.wizardStep = 2;
           draw();
         });
+
+        document.getElementById("open-custom-from-page1")?.addEventListener("click", () => {
+          syncFromWizardBasics();
+          state.mode = "advanced";
+          draw();
+        });
+        return;
+      }
+
+      if (state.wizardStep === 2) {
+        viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Promotion</h2></div><div class="panel form-grid promotion-config-panel"><p>When would you like to inform people about this promotion?</p><div id="touchpoint-list" class="promotion-touchpoints-stack">${state.touchpoints.map((tp, index) => buildPromotionWizardTouchpointMarkup(tp, index)).join("")}</div><button id="add-touchpoint-btn" class="secondary-btn" type="button">+ Add reminder touchpoint</button><p>What would you like to say to them?</p><div class="button-row promotion-submit-row"><button id="promo-next-message-btn" type="button">Next</button></div></div></section>`;
+
+        document.getElementById("add-touchpoint-btn")?.addEventListener("click", () => {
+          syncFromWizardTouchpoints();
+          state.touchpoints.push(buildPromotionTouchpointState({ order: state.touchpoints.length, offsetDays: 0 }, state.touchpoints.length));
+          draw();
+        });
+
+        document.getElementById("promo-next-message-btn")?.addEventListener("click", () => {
+          syncFromWizardTouchpoints();
+          state.wizardStep = 3;
+          draw();
+        });
+        return;
+      }
+
+      const endDate = toPromotionDate(state.endDate);
+      const touchpointSummary = state.touchpoints.map((touchpoint, index) => {
+        const sendAt = endDate ? new Date(endDate.getTime() - (Number(touchpoint.offsetDays) || 0) * 86400000) : null;
+        const template = normalizePromotionTemplateConfig(touchpoint.templateConfig || touchpoint.template || {});
+        const snippet = [template.introText, template.bodyText].filter(Boolean).join(" ").trim();
+        return `<article class="panel panel--lead"><p><strong>Touchpoint ${index + 1}</strong> · ${escapeHtml(String(touchpoint.offsetDays || 0))} days before end</p><p><strong>Scheduled:</strong> ${escapeHtml(sendAt ? sendAt.toLocaleString() : "-")}</p><p><strong>Subject:</strong> ${escapeHtml(template.subjectText || "(No subject)")}</p><p>${escapeHtml(snippet ? `${snippet.slice(0, 120)}${snippet.length > 120 ? "…" : ""}` : "No preview text yet.")}</p></article>`;
+      }).join("");
+      const cohortRows = leads.filter((lead) => state.cohortDraftLeadIds.has(lead.id));
+
+      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>Review Promotion</h2></div><div class="panel form-grid promotion-config-panel"><h3>Recap</h3><p><strong>Name:</strong> ${escapeHtml(state.name || "Untitled promo")}</p><p><strong>Ends:</strong> ${escapeHtml(endDate ? endDate.toLocaleString() : "-")}</p><div class="promotion-touchpoints-stack">${touchpointSummary}</div><h3>Cohort Preview</h3><p>Default cohort: <strong>All Active Leads</strong>. Snap Active behavior applies automatically to leads that qualify in your snap window.</p><p><strong>Selected leads:</strong> ${cohortRows.length}</p><div class="promotion-lead-list">${cohortRows.length ? cohortRows.map((lead) => `<article class="panel panel--lead"><p><strong>${escapeHtml(lead.name || "Unnamed")}</strong></p><p>${escapeHtml(lead.product || "No product")}</p></article>`).join("") : '<article class="panel panel--lead"><p>No leads selected yet.</p></article>'}</div><div class="button-row promotion-submit-row"><button id="create-promo-btn" type="button">Create Promotion</button></div><button type="button" id="open-custom-from-page3" class="link-btn">Customize cohort / targeting</button></div></section>`;
+
+      document.getElementById("create-promo-btn")?.addEventListener("click", async () => {
+        syncFromWizardTouchpoints();
+        await savePromotion();
       });
 
-      document.getElementById("promo-continue-btn")?.addEventListener("click", () => {
-        state.name = document.getElementById("promo-name")?.value || state.name;
-        state.endDate = document.getElementById("promo-end-date")?.value || state.endDate;
-        if (!state.name.trim() || !state.endDate || !state.presetKey) return alert("Name, end date, and preset are required.");
-        state.page = 2;
+      document.getElementById("open-custom-from-page3")?.addEventListener("click", () => {
+        syncFromWizardTouchpoints();
+        state.mode = "advanced";
         draw();
       });
       return;
@@ -2843,12 +3005,6 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipeli
 
     const cohortLeads = leads.filter((lead) => state.cohortDraftLeadIds.has(lead.id));
     viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${state.isEdit ? "Edit Promotion" : "Promotion Setup"}</h2></div><div class="panel form-grid promotion-config-panel"><h3>Basic Info</h3><label>Promo Name<input id="promo-name-edit" value="${escapeHtml(state.name)}" /></label><label>End Date<input id="promo-end-edit" type="datetime-local" value="${escapeHtml(state.endDate)}" /></label><h3>Touchpoints</h3><div id="touchpoint-list" class="promotion-touchpoints-stack">${state.touchpoints.map((tp, index) => buildPromotionTouchpointMarkup(tp, index)).join("")}</div><button id="add-touchpoint-btn" class="secondary-btn" type="button">Add Touchpoint</button><h3>Add to Cohort</h3><div class="button-row promotion-group-actions"><button type="button" class="secondary-btn" data-add-group="snap_active">Snap Active Leads</button><button type="button" class="secondary-btn" data-add-group="drop_out">Drop Off Leads</button><button type="button" class="secondary-btn" data-add-group="all_active">All Active Leads</button><button type="button" class="secondary-btn" id="clear-cohort-btn">Clear Cohort</button></div><label>Custom Search (additive)<input id="promo-search" value="${escapeHtml(state.searchText)}" placeholder="Name or product" /></label><div id="promo-search-results" class="lead-list promotion-lead-list"></div><h3>Cohort Preview (source of truth)</h3><div id="promo-cohort-preview" class="lead-list promotion-lead-list"></div><div class="button-row promotion-submit-row"><button id="create-promo-btn" type="button">${state.isEdit ? "Save Promotion" : "Create Promotion"}</button>${state.isEdit ? '<button id="delete-promo-btn" type="button" class="secondary-btn danger-btn">Delete Promotion</button>' : ""}</div></div></section>`;
-
-    const syncFromForm = () => {
-      state.name = document.getElementById("promo-name-edit")?.value || state.name;
-      state.endDate = document.getElementById("promo-end-edit")?.value || state.endDate;
-      state.touchpoints = syncPromotionTouchpointsFromForm(state.touchpoints);
-    };
 
     const renderSearchResults = () => {
       const promotionConfig = { name: state.name, endDate: state.endDate, touchpoints: state.touchpoints, targeting: ["custom_search"] };
@@ -2898,10 +3054,10 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipeli
 
     document.querySelectorAll("[data-add-group]").forEach((buttonEl) => {
       buttonEl.addEventListener("click", () => {
-        syncFromForm();
+        syncFromAdvancedForm();
         const group = buttonEl.dataset.addGroup;
-        const endDate = toPromotionDate(state.endDate);
-        if (!endDate) return;
+        const endDateValue = toPromotionDate(state.endDate);
+        if (!endDateValue) return;
         let additions = [];
         if (group === "all_active") additions = leads.filter((lead) => isLeadActive(lead));
         if (group === "drop_out") additions = leads.filter((lead) => isLeadDropOutState(lead));
@@ -2909,7 +3065,7 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipeli
           const matchedLeads = leads
             .map((lead) => ({
               lead,
-              match: findSnapMatch(lead, state.touchpoints, endDate, snapWindowDays, pipelineStages),
+              match: findSnapMatch(lead, state.touchpoints, endDateValue, snapWindowDays, pipelineStages),
             }))
             .filter((entry) => entry.match);
           additions = matchedLeads.map((entry) => entry.lead);
@@ -2936,7 +3092,7 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipeli
     });
 
     document.getElementById("add-touchpoint-btn")?.addEventListener("click", () => {
-      syncFromForm();
+      syncFromAdvancedForm();
       state.touchpoints.push(buildPromotionTouchpointState({ order: state.touchpoints.length, offsetDays: 0 }, state.touchpoints.length));
       draw();
     });
@@ -2954,71 +3110,8 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipeli
     });
 
     document.getElementById("create-promo-btn")?.addEventListener("click", async () => {
-      syncFromForm();
-      const selectedLeads = leads.filter((lead) => state.cohortDraftLeadIds.has(lead.id));
-      if (!selectedLeads.length) return alert("Please select at least one lead.");
-
-      try {
-        if (state.isEdit && state.editingPromotionId) {
-          const touchpointsPayload = buildPromotionTouchpoints(state.touchpoints);
-          const leadIdsPayload = selectedLeads.map((lead) => lead.id);
-          await updateDoc(doc(db, "users", currentUser.uid, "promotions", state.editingPromotionId), {
-            name: state.name,
-            endDate: Timestamp.fromDate(new Date(state.endDate)),
-            touchpoints: touchpointsPayload,
-            leadIds: leadIdsPayload,
-            selectionSourcesByLead: state.selectionSourcesByLead,
-            snapModeByLead: state.snapModeByLead,
-            snapMatchByLead: state.snapMatchByLead,
-            updatedAt: serverTimestamp(),
-          });
-          await syncPromotionTouchpointContainers({
-            db,
-            userId: currentUser.uid,
-            promotionId: state.editingPromotionId,
-            promotion: {
-              name: state.name,
-              endDate: state.endDate,
-              touchpoints: touchpointsPayload,
-              leadIds: leadIdsPayload,
-            },
-          });
-          await syncSnappedLeadPromotionPause({
-            db,
-            userId: currentUser.uid,
-            promotionId: state.editingPromotionId,
-            endDate: state.endDate,
-            pipelineDayStartTime,
-          });
-          await renderPromotionDetail(state.editingPromotionId);
-          return;
-        }
-
-        await createPromotion({
-          db,
-          userId: currentUser.uid,
-          promotion: {
-            name: state.name,
-            endDate: state.endDate,
-            touchpoints: buildPromotionTouchpoints(state.touchpoints),
-            targeting: Object.keys(state.selectionSourcesByLead),
-            presetKey: state.presetKey,
-          },
-          selectedLeads,
-          snapWindowDays,
-          pipelineStages,
-          pipelineDayStartTime,
-          presetLabel: PROMOTION_PRESETS[state.presetKey]?.label || "Custom",
-          snapModeByLead: state.snapModeByLead,
-          selectionSourcesByLead: state.selectionSourcesByLead,
-          snapMatchByLead: state.snapMatchByLead,
-        });
-
-        await renderPromotionsPage();
-      } catch (error) {
-        console.error("Failed to save promotion", error);
-        alert(`Could not save promotion: ${error?.message || "Unknown error"}`);
-      }
+      syncFromAdvancedForm();
+      await savePromotion();
     });
 
     renderSearchResults();
