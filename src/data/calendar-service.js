@@ -1,7 +1,7 @@
 import { Timestamp, collection, db, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc } from "./firestore-service.js";
 
 function isPromotionEvent(event = {}) {
-  return event?.type === "promotion" || Boolean(event?.promotionId);
+  return event?.type === "promotion" || event?.type === "promotion_touchpoint" || Boolean(event?.promotionId);
 }
 
 
@@ -105,12 +105,7 @@ export async function updateCalendarItemSchedule(currentUserId, calendarItem, ne
     return;
   }
 
-  if (calendarItem.type === "promotion") {
-    const eventRef = doc(db, "users", currentUserId, "events", calendarItem.id);
-    await updateDoc(eventRef, {
-      scheduledFor: Timestamp.fromDate(nextDate),
-      updatedAt: serverTimestamp(),
-    });
+  if (calendarItem.type === "promotion" || calendarItem.type === "promotion_touchpoint") {
     return;
   }
 

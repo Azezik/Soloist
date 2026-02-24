@@ -34,7 +34,8 @@ import { computeTargetLeads, isLeadActive, qualifiesForSnap } from "./promotions
 import {
   createPromotion,
   restoreExpiredPromotionStageReplacements,
-  restoreSnappedLeadsAndDeletePromotion
+  restoreSnappedLeadsAndDeletePromotion,
+  syncPromotionTouchpointContainers
 } from "./promotions/promotion-engine.js";
 import {
   DEFAULT_STAGE_TEMPLATE,
@@ -547,16 +548,18 @@ async function renderDashboard() {
 
   const duePromotions = promoEventsSnapshot.docs.map((eventDoc) => {
     const event = { id: eventDoc.id, ...eventDoc.data() };
-    const isPromotionEvent = event.type === "promotion" || Boolean(event.promotionId);
+    const isPromotionEvent = event.type === "promotion" || event.type === "promotion_touchpoint" || Boolean(event.promotionId);
     if (!isActiveRecord(event) || !isPromotionEvent) return null;
     const contact = event.contactId ? contactById[event.contactId] : null;
+    const isContainer = event.type === "promotion_touchpoint" || !event.leadId;
     return {
       type: "promotion",
       id: event.id,
-      leadId: event.leadId,
-      title: contact?.name || "Unnamed Contact",
-      subtitle: event.touchpointName || event.title || event.name || "Promotion touchpoint",
+      leadId: event.leadId || null,
+      title: isContainer ? (event.title || event.name || "Promotion touchpoint") : (contact?.name || "Unnamed Contact"),
+      subtitle: isContainer ? "Promotion" : (event.touchpointName || event.title || event.name || "Promotion touchpoint"),
       dueAt: event.scheduledFor || event.nextActionAt,
+      isContainer,
     };
   }).filter(Boolean);
 
@@ -571,7 +574,7 @@ async function renderDashboard() {
     }
 
     if (item.type === "promotion") {
-      return `<article class="panel feed-item feed-item-clickable feed-item--promotion" data-open-feed-item="true" data-feed-type="promotion" data-feed-id="${item.id}" tabindex="0" role="button"><p class="feed-type">Promotion</p><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p><p><strong>Due:</strong> ${formatDate(item.dueAt)}</p><div class="button-row"><button type="button" class="dashboard-action-btn" data-promo-event-done="${item.id}">Done</button></div></article>`;
+      return `<article class="panel feed-item feed-item-clickable feed-item--promotion" data-open-feed-item="true" data-feed-type="promotion" data-feed-id="${item.id}" tabindex="0" role="button"><p class="feed-type">Promotion</p><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p><p><strong>Due:</strong> ${formatDate(item.dueAt)}</p><div class="button-row">${item.isContainer ? '<a class="timeline-link-pill" href="' + appendOriginToHash(`#promotion-event/${item.id}`, window.location.hash) + '">Open</a>' : `<button type="button" class="dashboard-action-btn" data-promo-event-done="${item.id}">Done</button>`}</div></article>`;
     }
 
     return `<article class="panel feed-item feed-item-clickable feed-item--task" data-open-feed-item="true" data-feed-type="task" data-feed-id="${item.id}" tabindex="0" role="button"><p class="feed-type">Task</p><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p><p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ""}<div class="button-row"><button type="button" class="dashboard-action-btn" data-task-action="done" data-task-id="${item.id}">Done</button><details class="push-menu"><summary class="dashboard-action-btn">Push</summary><div class="push-dropdown" data-push-entity="task" data-push-id="${item.id}">${pushOptionsMarkup}</div></details></div></article>`;
@@ -1995,7 +1998,158 @@ function renderPlaceholder(title) {
   `;
 }
 
+async function syncPromotionSnapshotProgress({ promotionId, leadId }) {
+  if (!promotionId || !leadId) return;
+
+  const promotionRef = doc(db, "users", currentUser.uid, "promotions", promotionId);
+  const promotionSnapshot = await getDoc(promotionRef);
+  if (!promotionSnapshot.exists()) return;
+
+  const promotion = promotionSnapshot.data() || {};
+  const touchpoints = Array.isArray(promotion.touchpoints) ? promotion.touchpoints : [];
+  const statusSnapshots = await Promise.all(
+    touchpoints.map((touchpoint) =>
+      getDoc(doc(db, "users", currentUser.uid, "promotions", promotionId, "touchpoints", touchpoint.id, "statuses", leadId))
+    )
+  );
+
+  const statusEntries = statusSnapshots
+    .filter((entry) => entry.exists())
+    .map((entry) => ({ id: entry.id, ...entry.data() }));
+
+  const completedTouchpointCount = statusEntries.filter((entry) => entry.completed === true).length;
+  const snapshotRef = doc(db, "users", currentUser.uid, "promotions", promotionId, "snapshots", leadId);
+  const snapshotDoc = await getDoc(snapshotRef);
+  if (!snapshotDoc.exists()) return;
+
+  const snapshot = snapshotDoc.data() || {};
+  if (snapshot?.addedViaSnapActive !== true) return;
+
+  await updateDoc(snapshotRef, {
+    completedTouchpointCount,
+    zeroTouchpointsCompleted: completedTouchpointCount === 0,
+    lastCompletedPromotionTouchpointAt: completedTouchpointCount
+      ? serverTimestamp()
+      : snapshot.lastCompletedPromotionTouchpointAt || null,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+async function reconcilePromotionLeadProgressFromStatuses({ promotionId, leadId, completedAt = new Date() }) {
+  if (!promotionId || !leadId) return;
+
+  const promotionRef = doc(db, "users", currentUser.uid, "promotions", promotionId);
+  const promotionSnapshot = await getDoc(promotionRef);
+  if (!promotionSnapshot.exists()) return;
+
+  const promotion = promotionSnapshot.data() || {};
+  const touchpoints = Array.isArray(promotion.touchpoints) ? promotion.touchpoints : [];
+  if (!touchpoints.length) return;
+
+  const statusSnapshots = await Promise.all(
+    touchpoints.map((touchpoint) =>
+      getDoc(doc(db, "users", currentUser.uid, "promotions", promotionId, "touchpoints", touchpoint.id, "statuses", leadId))
+    )
+  );
+
+  const unresolved = statusSnapshots.some((snapshotDoc) => {
+    if (!snapshotDoc.exists()) return true;
+    const status = snapshotDoc.data() || {};
+    return status.completed !== true && status.status !== "skipped";
+  });
+
+  await syncPromotionSnapshotProgress({ promotionId, leadId });
+
+  if (unresolved) return;
+
+  const leadRef = doc(db, "users", currentUser.uid, "leads", leadId);
+  const [leadSnapshot, pipelineSettings] = await Promise.all([getDoc(leadRef), getPipelineSettings(currentUser.uid)]);
+  if (!leadSnapshot.exists()) return;
+
+  await completeLeadStage({
+    userId: currentUser.uid,
+    leadRef,
+    lead: leadSnapshot.data(),
+    leadSource: "leads",
+    pipelineSettings,
+    completedAt,
+    actionSource: "promotion_touchpoint",
+  });
+
+  const snapshotRef = doc(db, "users", currentUser.uid, "promotions", promotionId, "snapshots", leadId);
+  const snapshotDoc = await getDoc(snapshotRef);
+  if (snapshotDoc.exists()) {
+    await updateDoc(snapshotRef, {
+      promotionResolvedAt: serverTimestamp(),
+      lastCompletedPromotionTouchpointAt: Timestamp.fromDate(completedAt instanceof Date ? completedAt : new Date(completedAt)),
+      updatedAt: serverTimestamp(),
+    });
+  }
+}
+
+async function markPromotionTouchpointLeadStatus({ event, leadId, status }) {
+  if (!event?.promotionId || !event?.touchpointId || !leadId) return;
+  const statusRef = doc(
+    db,
+    "users",
+    currentUser.uid,
+    "promotions",
+    event.promotionId,
+    "touchpoints",
+    event.touchpointId,
+    "statuses",
+    leadId
+  );
+
+  const isDone = status === "completed";
+  await setDoc(
+    statusRef,
+    {
+      leadId,
+      promotionId: event.promotionId,
+      touchpointId: event.touchpointId,
+      status,
+      completed: isDone,
+      skipped: status === "skipped",
+      completedAt: isDone ? serverTimestamp() : null,
+      skippedAt: status === "skipped" ? serverTimestamp() : null,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  const [statusSnapshot, eventSnapshot] = await Promise.all([
+    getDocs(collection(db, "users", currentUser.uid, "promotions", event.promotionId, "touchpoints", event.touchpointId, "statuses")),
+    getDocs(query(collection(db, "users", currentUser.uid, "events"), where("promotionId", "==", event.promotionId), where("touchpointId", "==", event.touchpointId))),
+  ]);
+  const allResolved = statusSnapshot.docs.every((statusDoc) => {
+    const statusData = statusDoc.data() || {};
+    return statusData.completed === true || statusData.status === "skipped";
+  });
+
+  const containerEvent = eventSnapshot.docs
+    .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+    .find((entry) => entry.type === "promotion_touchpoint");
+
+  if (containerEvent) {
+    await updateDoc(doc(db, "users", currentUser.uid, "events", containerEvent.id), {
+      completed: allResolved,
+      archived: allResolved,
+      status: allResolved ? "completed" : "open",
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  await reconcilePromotionLeadProgressFromStatuses({
+    promotionId: event.promotionId,
+    leadId,
+    completedAt: new Date(),
+  });
+}
+
 async function reconcilePromotionLeadProgress(event, eventId) {
+  if (event?.type === "promotion_touchpoint") return;
+
   const siblingSnapshot = await getDocs(
     query(collection(db, "users", currentUser.uid, "events"), where("promotionId", "==", event.promotionId), where("leadId", "==", event.leadId))
   );
@@ -2051,6 +2205,7 @@ async function markPromotionEventDone(eventId) {
   if (!eventSnapshot.exists()) return;
 
   const event = { id: eventSnapshot.id, ...eventSnapshot.data() };
+  if (event.type === "promotion_touchpoint") return;
   if (event.completed || event.status === "skipped") return;
 
   const completedAt = new Date();
@@ -2071,6 +2226,7 @@ async function markPromotionEventSkipped(eventId) {
   if (!eventSnapshot.exists()) return;
 
   const event = { id: eventSnapshot.id, ...eventSnapshot.data() };
+  if (event.type === "promotion_touchpoint") return;
   if (event.completed || event.status === "skipped") return;
 
   await updateDoc(eventRef, {
@@ -2105,6 +2261,113 @@ async function renderPromotionEventDetail(eventId) {
   }
 
   const event = { id: eventSnapshot.id, ...eventSnapshot.data() };
+
+  if (event.type === "promotion_touchpoint") {
+    const promotionRef = doc(db, "users", currentUser.uid, "promotions", event.promotionId);
+    const promotionSnapshot = await getDoc(promotionRef);
+    if (!promotionSnapshot.exists()) {
+      viewContainer.innerHTML = '<p class="view-message">Promotion not found.</p>';
+      return;
+    }
+
+    const promotion = { id: promotionSnapshot.id, ...promotionSnapshot.data() };
+    const touchpoint = (Array.isArray(promotion.touchpoints) ? promotion.touchpoints : []).find((entry) => entry.id === event.touchpointId);
+    if (!touchpoint) {
+      viewContainer.innerHTML = '<p class="view-message">Touchpoint not found.</p>';
+      return;
+    }
+
+    const leadIds = Array.isArray(promotion.leadIds) ? promotion.leadIds : [];
+    const [leadsSnapshot, contactsSnapshot, statusesSnapshot] = await Promise.all([
+      getDocs(collection(db, "users", currentUser.uid, "leads")),
+      getDocs(collection(db, "users", currentUser.uid, "contacts")),
+      getDocs(collection(db, "users", currentUser.uid, "promotions", event.promotionId, "touchpoints", event.touchpointId, "statuses")),
+    ]);
+
+    const leadsById = leadsSnapshot.docs.reduce((acc, leadDoc) => {
+      acc[leadDoc.id] = { id: leadDoc.id, ...leadDoc.data() };
+      return acc;
+    }, {});
+    const contactsById = contactsSnapshot.docs.reduce((acc, contactDoc) => {
+      acc[contactDoc.id] = { id: contactDoc.id, ...contactDoc.data() };
+      return acc;
+    }, {});
+    const statusesByLeadId = statusesSnapshot.docs.reduce((acc, statusDoc) => {
+      acc[statusDoc.id] = { id: statusDoc.id, ...statusDoc.data() };
+      return acc;
+    }, {});
+
+    const templateConfig = normalizePromotionTemplateConfig(touchpoint.templateConfig || touchpoint.template || event.templateConfig || {});
+
+    const rowsMarkup = leadIds.map((leadId) => {
+      const lead = leadsById[leadId] || {};
+      const contact = contactsById[lead.contactId] || {};
+      const name = contact.name || lead.name || "Unnamed";
+      const mailBody = renderTemplateWithLead(templateConfig, name).trim();
+      const mailTo = String(contact.email || "").trim();
+      const status = statusesByLeadId[leadId] || {};
+      const stateLabel = status.status === "skipped" ? "Skipped" : status.completed ? "Done" : "Open";
+      return `<tr><td>${escapeHtml(name)}</td><td>${escapeHtml(lead.product || "-")}</td><td>${escapeHtml(stateLabel)}</td><td><div class="button-row"><button type="button" class="secondary-btn" data-promo-open-mail="${leadId}" ${mailTo ? `data-mail-to="${escapeHtml(mailTo)}"` : "disabled"} data-mail-subject="${escapeHtml(templateConfig.subjectText || "")}" data-mail-body="${escapeHtml(mailBody)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(mailBody)}">Copy</button>${lead.id ? `<a class="secondary-btn" href="#lead/${encodeURIComponent(lead.id)}">Open Lead</a>` : ""}<button type="button" class="secondary-btn" data-promo-touchpoint-done="${leadId}" ${status.completed || status.status === "skipped" ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-promo-touchpoint-skip="${leadId}" ${status.completed || status.status === "skipped" ? "disabled" : ""}>Skip</button></div></td></tr>`;
+    }).join("") || '<tr><td colspan="4">No leads in this touchpoint.</td></tr>';
+
+    const mailPreview = renderTemplateWithLead(templateConfig, "").trim();
+
+    viewContainer.innerHTML = `
+      <section class="crm-view crm-view--promotions">
+        <div class="view-header">
+          <h2>${escapeHtml(event.title || event.name || `${promotion.name || "Promotion"} — ${touchpoint.name || "Touchpoint"}`)}</h2>
+          <div class="view-header-actions">
+            <button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button>
+          </div>
+        </div>
+        <div class="panel panel--lead detail-grid feed-item--promotion">
+          <p><strong>Promotion:</strong> ${escapeHtml(promotion.name || "Untitled promo")}</p>
+          <p><strong>Touchpoint:</strong> ${escapeHtml(touchpoint.name || "Touchpoint")}</p>
+          <p><strong>Due:</strong> ${formatDate(event.scheduledFor)}</p>
+        </div>
+        <div class="panel panel--lead notes-panel">
+          <label class="full-width">Template Preview<textarea rows="5" readonly>${escapeHtml(mailPreview)}</textarea></label>
+          <div class="table-wrap"><table><thead><tr><th>Lead</th><th>Product</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rowsMarkup}</tbody></table></div>
+        </div>
+      </section>
+    `;
+
+    document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
+      window.location.hash = originRoute || "#dashboard";
+    });
+
+    document.querySelectorAll("[data-promo-open-mail]").forEach((buttonEl) => {
+      buttonEl.addEventListener("click", () => {
+        const to = buttonEl.dataset.mailTo || "";
+        if (!to) return;
+        const subject = encodeURIComponent(buttonEl.dataset.mailSubject || "");
+        const body = encodeURIComponent(buttonEl.dataset.mailBody || "");
+        window.open(`mailto:${encodeURIComponent(to)}?subject=${subject}&body=${body}`, "_blank");
+      });
+    });
+
+    document.querySelectorAll("[data-promo-touchpoint-done]").forEach((buttonEl) => {
+      buttonEl.addEventListener("click", async () => {
+        const leadId = buttonEl.dataset.promoTouchpointDone;
+        if (!leadId) return;
+        await markPromotionTouchpointLeadStatus({ event, leadId, status: "completed" });
+        await renderPromotionEventDetail(eventId);
+      });
+    });
+
+    document.querySelectorAll("[data-promo-touchpoint-skip]").forEach((buttonEl) => {
+      buttonEl.addEventListener("click", async () => {
+        const leadId = buttonEl.dataset.promoTouchpointSkip;
+        if (!leadId) return;
+        await markPromotionTouchpointLeadStatus({ event, leadId, status: "skipped" });
+        await renderPromotionEventDetail(eventId);
+      });
+    });
+
+    attachClipboardHandlers(viewContainer);
+    return;
+  }
+
   const [contactSnapshot, leadSnapshot] = await Promise.all([
     event.contactId ? getDoc(doc(db, "users", currentUser.uid, "contacts", event.contactId)) : Promise.resolve(null),
     event.leadId ? getDoc(doc(db, "users", currentUser.uid, "leads", event.leadId)) : Promise.resolve(null),
@@ -2198,18 +2461,48 @@ async function renderPromotionDetail(promotionId) {
   const events = eventsSnapshot.docs.map((eventDoc) => ({ id: eventDoc.id, ...eventDoc.data() }));
   const touchpoints = Array.isArray(promotion.touchpoints) ? promotion.touchpoints : [];
   const previewState = {};
+  const statusesByTouchpoint = {};
+  await Promise.all(
+    touchpoints.map(async (touchpoint) => {
+      const statusSnapshot = await getDocs(collection(db, "users", currentUser.uid, "promotions", promotionId, "touchpoints", touchpoint.id, "statuses"));
+      statusesByTouchpoint[touchpoint.id] = statusSnapshot.docs.reduce((acc, statusDoc) => {
+        acc[statusDoc.id] = { id: statusDoc.id, ...statusDoc.data() };
+        return acc;
+      }, {});
+    })
+  );
 
   const touchpointMarkup = touchpoints.map((touchpoint, index) => {
     const touchpointEvents = events
       .filter((event) => event.touchpointId === touchpoint.id)
       .sort((a, b) => (toDate(a.scheduledFor)?.getTime() || 0) - (toDate(b.scheduledFor)?.getTime() || 0));
+    const legacyLeadEvents = touchpointEvents.filter((event) => Boolean(event.leadId));
+    const touchpointStatuses = statusesByTouchpoint[touchpoint.id] || {};
     const templateConfig = normalizePromotionTemplateConfig(touchpoint.templateConfig || touchpoint.template || {});
     const variables = detectTemplateVariables(templateConfig);
-    const leadOptions = touchpointEvents.map((event) => {
-      const lead = leadsById[event.leadId] || {};
-      const contact = contactsById[lead.contactId] || {};
-      return { event, lead, contact, name: contact.name || lead.name || "Unnamed" };
-    });
+    const leadOptions = legacyLeadEvents.length
+      ? legacyLeadEvents.map((event) => {
+        const lead = leadsById[event.leadId] || {};
+        const contact = contactsById[lead.contactId] || {};
+        return { event, lead, contact, name: contact.name || lead.name || "Unnamed" };
+      })
+      : (Array.isArray(promotion.leadIds) ? promotion.leadIds : []).map((leadId) => {
+        const lead = leadsById[leadId] || {};
+        const contact = contactsById[lead.contactId] || {};
+        const status = touchpointStatuses[leadId] || {};
+        return {
+          event: {
+            id: `${promotionId}:${touchpoint.id}:${leadId}`,
+            leadId,
+            status: status.status || "open",
+            completed: status.completed === true,
+            touchpointId: touchpoint.id,
+          },
+          lead,
+          contact,
+          name: contact.name || lead.name || "Unnamed",
+        };
+      });
     const previewLeadId = leadOptions[0]?.event?.leadId || "";
     previewState[touchpoint.id] = previewLeadId;
 
@@ -2265,7 +2558,13 @@ async function renderPromotionDetail(promotionId) {
     buttonEl.addEventListener("click", async () => {
       const eventId = buttonEl.dataset.promoTouchpointDone;
       if (!eventId) return;
-      await markPromotionEventDone(eventId);
+      if (eventId.includes(":")) {
+        const [, touchpointId, leadId] = eventId.split(":");
+        const containerEvent = events.find((entry) => entry.touchpointId === touchpointId && entry.type === "promotion_touchpoint") || { promotionId, touchpointId };
+        await markPromotionTouchpointLeadStatus({ event: containerEvent, leadId, status: "completed" });
+      } else {
+        await markPromotionEventDone(eventId);
+      }
       await renderPromotionDetail(promotionId);
     });
   });
@@ -2274,7 +2573,13 @@ async function renderPromotionDetail(promotionId) {
     buttonEl.addEventListener("click", async () => {
       const eventId = buttonEl.dataset.promoTouchpointSkip;
       if (!eventId) return;
-      await markPromotionEventSkipped(eventId);
+      if (eventId.includes(":")) {
+        const [, touchpointId, leadId] = eventId.split(":");
+        const containerEvent = events.find((entry) => entry.touchpointId === touchpointId && entry.type === "promotion_touchpoint") || { promotionId, touchpointId };
+        await markPromotionTouchpointLeadStatus({ event: containerEvent, leadId, status: "skipped" });
+      } else {
+        await markPromotionEventSkipped(eventId);
+      }
       await renderPromotionDetail(promotionId);
     });
   });
@@ -2595,14 +2900,27 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
 
       try {
         if (state.isEdit && state.editingPromotionId) {
+          const touchpointsPayload = buildPromotionTouchpoints(state.touchpoints);
+          const leadIdsPayload = selectedLeads.map((lead) => lead.id);
           await updateDoc(doc(db, "users", currentUser.uid, "promotions", state.editingPromotionId), {
             name: state.name,
             endDate: Timestamp.fromDate(new Date(state.endDate)),
-            touchpoints: buildPromotionTouchpoints(state.touchpoints),
-            leadIds: selectedLeads.map((lead) => lead.id),
+            touchpoints: touchpointsPayload,
+            leadIds: leadIdsPayload,
             selectionSourcesByLead: state.selectionSourcesByLead,
             snapModeByLead: state.snapModeByLead,
             updatedAt: serverTimestamp(),
+          });
+          await syncPromotionTouchpointContainers({
+            db,
+            userId: currentUser.uid,
+            promotionId: state.editingPromotionId,
+            promotion: {
+              name: state.name,
+              endDate: state.endDate,
+              touchpoints: touchpointsPayload,
+              leadIds: leadIdsPayload,
+            },
           });
           await renderPromotionDetail(state.editingPromotionId);
           return;
