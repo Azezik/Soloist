@@ -224,6 +224,40 @@ function normalizeSnapMatchForPersistence(rawMatch = {}, pipelineStages = []) {
   };
 }
 
+function computeSnappedLeadAdvanceState({ pipelineStages = [], pipelineDayStartTime = "09:00", replacedStageId = null, endDate }) {
+  if (!replacedStageId || !Array.isArray(pipelineStages) || !pipelineStages.length) {
+    return null;
+  }
+
+  const replacedStageIndex = getStageIndexById(pipelineStages, replacedStageId);
+  if (replacedStageIndex < 0) return null;
+
+  const nextStage = pipelineStages[replacedStageIndex + 1] || null;
+  if (!nextStage) {
+    return {
+      stageId: replacedStageId,
+      stageStatus: "completed",
+      status: "closed",
+      archived: true,
+      nextActionAt: null,
+    };
+  }
+
+  const effectivePipelineSettings = {
+    stages: pipelineStages,
+    dayStartTime: pipelineDayStartTime,
+  };
+  const deltaDays = Math.max(0, computeOffsetDeltaDays(effectivePipelineSettings, replacedStageId, nextStage.id));
+
+  return {
+    stageId: nextStage.id,
+    stageStatus: "pending",
+    status: "open",
+    archived: false,
+    nextActionAt: computeNextActionAt(endDate, deltaDays, pipelineDayStartTime),
+  };
+}
+
 function computeRecalculatedStageTimestamp({
   pipelineSettings,
   replacedStageId,
@@ -290,10 +324,12 @@ async function restoreLeadFromPromotionSnapshot({ leadRef, leadData = {}, snapsh
   });
 
   const strictPrePromoRestore = reason === "promotion_deleted";
+  const restoredStageId = snapshot.prePromoStageId || replacedStageId;
+  const restoredStageStatus = snapshot.prePromoStageStatus || "pending";
 
   await updateDoc(leadRef, {
-    stageId: replacedStageId,
-    stageStatus: "pending",
+    stageId: restoredStageId,
+    stageStatus: restoredStageStatus,
     status: "open",
     archived: false,
     nextActionAt: strictPrePromoRestore ? prePromoNextActionAt : shouldRecompute ? recalculatedNextActionAt : prePromoNextActionAt,
@@ -403,7 +439,8 @@ async function createPromotion({
         completedTouchpointCount: 0,
         zeroTouchpointsCompleted: true,
         lastCompletedPromotionTouchpointAt: null,
-        prePromoStageId: snapMatch.stageId || null,
+        prePromoStageId: lead.stageId || null,
+        prePromoStageStatus: lead.stageStatus || "pending",
         prePromoNextActionAt: toSnapshotTimestamp(lead.nextActionAt),
         prePromoLastActionAt: toSnapshotTimestamp(lead.lastActionAt),
         prePromoCreatedAt: serverTimestamp(),
@@ -414,7 +451,12 @@ async function createPromotion({
       if (snapMatch.candidateDay) snapshotPayload.expectedSnapScheduledDate = Timestamp.fromDate(new Date(snapMatch.candidateDay));
       logSnapOverwrite({ leadId: lead.id, promotionId: promotionRef.id, snapMatch });
       try {
-        const pausedNextActionAt = computeNextActionAt(endDate, 0, pipelineDayStartTime);
+        const snappedAdvanceState = computeSnappedLeadAdvanceState({
+          pipelineStages,
+          pipelineDayStartTime,
+          replacedStageId: snapMatch.stageId || null,
+          endDate,
+        });
         await setDoc(doc(db, "users", userId, "promotions", promotionRef.id, "snapshots", lead.id), snapshotPayload);
         await updateDoc(doc(db, "users", userId, "leads", lead.id), {
           snapMetadata: {
@@ -429,7 +471,12 @@ async function createPromotion({
             addedViaSnapActive: true,
           },
           snappedPromotionId: promotionRef.id,
-          nextActionAt: pausedNextActionAt,
+          ...(snappedAdvanceState || {
+            stageStatus: lead.stageStatus || "pending",
+            status: lead.status || "open",
+            archived: Boolean(lead.archived),
+            nextActionAt: computeNextActionAt(endDate, 0, pipelineDayStartTime),
+          }),
           updatedAt: serverTimestamp(),
         });
       } catch (error) {
@@ -724,14 +771,27 @@ async function syncSnappedLeadPromotionPause({ db, userId, promotionId, endDate,
   const resolvedEndDate = toPromotionDate(endDate);
   if (!resolvedEndDate || !promotionId) return;
 
-  const pausedNextActionAt = computeNextActionAt(resolvedEndDate, 0, pipelineDayStartTime);
-  const snappedLeads = await getDocs(
-    query(collection(db, "users", userId, "leads"), where("snappedPromotionId", "==", promotionId))
-  );
+  const [snappedLeads, snapshotDocs, pipelineSettingsSnapshot] = await Promise.all([
+    getDocs(query(collection(db, "users", userId, "leads"), where("snappedPromotionId", "==", promotionId))),
+    getDocs(collection(db, "users", userId, "promotions", promotionId, "snapshots")),
+    getDoc(doc(db, "users", userId, "settings", "pipeline")),
+  ]);
+  const pipelineSettings = pipelineSettingsSnapshot.exists() ? pipelineSettingsSnapshot.data() : null;
+  const pipelineStages = Array.isArray(pipelineSettings?.stages) ? pipelineSettings.stages : [];
+  const snapshotsByLeadId = new Map(snapshotDocs.docs.map((snapshotDoc) => [snapshotDoc.id, snapshotDoc.data() || {}]));
 
   for (const leadDoc of snappedLeads.docs) {
+    const snapshot = snapshotsByLeadId.get(leadDoc.id) || {};
+    const replacedStageId = snapshot.replacedStageId || snapshot.expectedSnapStageId || null;
+    const snappedAdvanceState = computeSnappedLeadAdvanceState({
+      pipelineStages,
+      pipelineDayStartTime,
+      replacedStageId,
+      endDate: resolvedEndDate,
+    });
+
     await updateDoc(leadDoc.ref, {
-      nextActionAt: pausedNextActionAt,
+      ...(snappedAdvanceState || { nextActionAt: computeNextActionAt(resolvedEndDate, 0, pipelineDayStartTime) }),
       updatedAt: serverTimestamp(),
     });
   }
