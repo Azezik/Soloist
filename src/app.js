@@ -35,7 +35,8 @@ import {
   createPromotion,
   restoreExpiredPromotionStageReplacements,
   restoreSnappedLeadsAndDeletePromotion,
-  syncPromotionTouchpointContainers
+  syncPromotionTouchpointContainers,
+  syncSnappedLeadPromotionPause
 } from "./promotions/promotion-engine.js";
 import {
   DEFAULT_STAGE_TEMPLATE,
@@ -2066,13 +2067,16 @@ async function reconcilePromotionLeadProgressFromStatuses({ promotionId, leadId,
   const [leadSnapshot, pipelineSettings] = await Promise.all([getDoc(leadRef), getPipelineSettings(currentUser.uid)]);
   if (!leadSnapshot.exists()) return;
 
+  const promotionEndDate = toPromotionDate(promotion.endDate);
+  const completionAnchor = promotionEndDate || completedAt;
+
   await completeLeadStage({
     userId: currentUser.uid,
     leadRef,
     lead: leadSnapshot.data(),
     leadSource: "leads",
     pipelineSettings,
-    completedAt,
+    completedAt: completionAnchor,
     actionSource: "promotion_touchpoint",
   });
 
@@ -2178,13 +2182,17 @@ async function reconcilePromotionLeadProgress(event, eventId) {
     const [leadSnapshot, pipelineSettings] = await Promise.all([getDoc(leadRef), getPipelineSettings(currentUser.uid)]);
     if (leadSnapshot.exists()) {
       const completedAt = toDate(event.completedAt) || new Date();
+      const promotionRef = doc(db, "users", currentUser.uid, "promotions", event.promotionId);
+      const promotionSnapshot = await getDoc(promotionRef);
+      const promotionEndDate = promotionSnapshot.exists() ? toPromotionDate(promotionSnapshot.data()?.endDate) : null;
+      const completionAnchor = promotionEndDate || completedAt;
       await completeLeadStage({
         userId: currentUser.uid,
         leadRef,
         lead: leadSnapshot.data(),
         leadSource: "leads",
         pipelineSettings,
-        completedAt,
+        completedAt: completionAnchor,
         actionSource: "promotion_touchpoint",
       });
 
@@ -2637,7 +2645,7 @@ async function renderPromotionsPage() {
   `;
 
   document.getElementById("new-promo-btn")?.addEventListener("click", () => {
-    renderPromotionCreateFlow({ snapWindowDays, pipelineStages, leads, promotions });
+    renderPromotionCreateFlow({ snapWindowDays, pipelineStages, pipelineDayStartTime: appSettings.pipeline?.dayStartTime || "09:00", leads, promotions });
   });
 
   const route = routeFromHash();
@@ -2645,7 +2653,7 @@ async function renderPromotionsPage() {
   if (editPromotionId) {
     const editablePromotion = promotions.find((promo) => promo.id === editPromotionId);
     if (editablePromotion) {
-      renderPromotionCreateFlow({ snapWindowDays, pipelineStages, leads, promotions, existingPromotion: editablePromotion });
+      renderPromotionCreateFlow({ snapWindowDays, pipelineStages, pipelineDayStartTime: appSettings.pipeline?.dayStartTime || "09:00", leads, promotions, existingPromotion: editablePromotion });
       return;
     }
   }
@@ -2716,7 +2724,7 @@ function syncPromotionTouchpointsFromForm(touchpoints = []) {
   });
 }
 
-function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads, promotions = [], existingPromotion = null }) {
+function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipelineDayStartTime = "09:00", leads, promotions = [], existingPromotion = null }) {
   const state = {
     page: 1,
     isEdit: Boolean(existingPromotion?.id),
@@ -2937,6 +2945,13 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
               leadIds: leadIdsPayload,
             },
           });
+          await syncSnappedLeadPromotionPause({
+            db,
+            userId: currentUser.uid,
+            promotionId: state.editingPromotionId,
+            endDate: state.endDate,
+            pipelineDayStartTime,
+          });
           await renderPromotionDetail(state.editingPromotionId);
           return;
         }
@@ -2954,6 +2969,7 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
           selectedLeads,
           snapWindowDays,
           pipelineStages,
+          pipelineDayStartTime,
           presetLabel: PROMOTION_PRESETS[state.presetKey]?.label || "Custom",
           snapModeByLead: state.snapModeByLead,
           selectionSourcesByLead: state.selectionSourcesByLead,

@@ -289,12 +289,14 @@ async function restoreLeadFromPromotionSnapshot({ leadRef, leadData = {}, snapsh
     snapshot,
   });
 
+  const strictPrePromoRestore = reason === "promotion_deleted";
+
   await updateDoc(leadRef, {
     stageId: replacedStageId,
     stageStatus: "pending",
     status: "open",
     archived: false,
-    nextActionAt: shouldRecompute ? recalculatedNextActionAt : prePromoNextActionAt,
+    nextActionAt: strictPrePromoRestore ? prePromoNextActionAt : shouldRecompute ? recalculatedNextActionAt : prePromoNextActionAt,
     snapMode: deleteField(),
     snappedPromotionId: deleteField(),
     snapMetadata: deleteField(),
@@ -312,6 +314,7 @@ async function createPromotion({
   selectedLeads,
   snapWindowDays = 2,
   pipelineStages = [],
+  pipelineDayStartTime = "09:00",
   presetLabel = "Custom",
   snapModeByLead = {},
   selectionSourcesByLead = {},
@@ -411,6 +414,7 @@ async function createPromotion({
       if (snapMatch.candidateDay) snapshotPayload.expectedSnapScheduledDate = Timestamp.fromDate(new Date(snapMatch.candidateDay));
       logSnapOverwrite({ leadId: lead.id, promotionId: promotionRef.id, snapMatch });
       try {
+        const pausedNextActionAt = computeNextActionAt(endDate, 0, pipelineDayStartTime);
         await setDoc(doc(db, "users", userId, "promotions", promotionRef.id, "snapshots", lead.id), snapshotPayload);
         await updateDoc(doc(db, "users", userId, "leads", lead.id), {
           snapMetadata: {
@@ -425,6 +429,7 @@ async function createPromotion({
             addedViaSnapActive: true,
           },
           snappedPromotionId: promotionRef.id,
+          nextActionAt: pausedNextActionAt,
           updatedAt: serverTimestamp(),
         });
       } catch (error) {
@@ -571,14 +576,7 @@ async function restoreExpiredPromotionStageReplacements({ db, userId, asOfDate =
     const touchpoints = Array.isArray(promotion.touchpoints) ? promotion.touchpoints : [];
     if (!touchpoints.length) continue;
 
-    const lastTouchpointDate = touchpoints.reduce((latest, touchpoint) => {
-      const touchpointDate = computeTouchpointDate(endDate, touchpoint.offsetDays);
-      return !latest || touchpointDate > latest ? touchpointDate : latest;
-    }, null);
-
-    if (!lastTouchpointDate) continue;
-
-    const restoreEligibleDate = new Date(lastTouchpointDate);
+    const restoreEligibleDate = new Date(endDate);
     restoreEligibleDate.setHours(0, 0, 0, 0);
     restoreEligibleDate.setDate(restoreEligibleDate.getDate() + 1);
     if (restoreStart.getTime() < restoreEligibleDate.getTime()) continue;
@@ -606,6 +604,14 @@ async function restoreExpiredPromotionStageReplacements({ db, userId, asOfDate =
         snapshot,
         pipelineSettings,
         reason: "promotion_expired_no_touchpoints",
+      });
+
+      const dayStartTime = pipelineSettings?.dayStartTime || "09:00";
+      const resumeAt = computeNextActionAt(endDate, 1, dayStartTime);
+      await updateDoc(leadRef, {
+        stageId: snapshot.replacedStageId || snapshot.expectedSnapStageId || leadSnapshot.data()?.stageId || null,
+        nextActionAt: resumeAt,
+        updatedAt: serverTimestamp(),
       });
 
       await updateDoc(snapshotDoc.ref, {
@@ -713,4 +719,22 @@ async function syncPromotionTouchpointContainers({ db, userId, promotionId, prom
   }
 }
 
-export { createPromotion, restoreSnappedLeadsAndDeletePromotion, restoreExpiredPromotionStageReplacements, syncPromotionTouchpointContainers };
+
+async function syncSnappedLeadPromotionPause({ db, userId, promotionId, endDate, pipelineDayStartTime = "09:00" }) {
+  const resolvedEndDate = toPromotionDate(endDate);
+  if (!resolvedEndDate || !promotionId) return;
+
+  const pausedNextActionAt = computeNextActionAt(resolvedEndDate, 0, pipelineDayStartTime);
+  const snappedLeads = await getDocs(
+    query(collection(db, "users", userId, "leads"), where("snappedPromotionId", "==", promotionId))
+  );
+
+  for (const leadDoc of snappedLeads.docs) {
+    await updateDoc(leadDoc.ref, {
+      nextActionAt: pausedNextActionAt,
+      updatedAt: serverTimestamp(),
+    });
+  }
+}
+
+export { createPromotion, restoreSnappedLeadsAndDeletePromotion, restoreExpiredPromotionStageReplacements, syncPromotionTouchpointContainers, syncSnappedLeadPromotionPause };
