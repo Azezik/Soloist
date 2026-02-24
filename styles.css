@@ -574,23 +574,8 @@ select {
   margin: 0;
 }
 
-.promotion-wizard-divider {
-  width: 100%;
-  border: 0;
-  border-top: 1px solid var(--crm-divider);
-  margin: 0.2rem 0;
-}
-
-.promotion-wizard-timing-list {
-  display: grid;
-  gap: 0.55rem;
-}
-
-.promotion-wizard-timing-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.45rem;
+.promotion-wizard-block .promotion-touchpoints-stack {
+  gap: 1rem;
 }
 
 .promotion-wizard-timing-sentence {
@@ -598,14 +583,19 @@ select {
   align-items: center;
   gap: 0.45rem;
   margin: 0;
+  width: fit-content;
+  font-weight: 600;
 }
 
 .promotion-wizard-offset-input {
   width: 72px;
+  min-width: 72px;
+  padding: 0.4rem 0.55rem;
 }
 
 .promotion-wizard-message-card {
   gap: 0.5rem;
+  padding: 1rem;
 }
 
 .promotion-lead-list-item {
