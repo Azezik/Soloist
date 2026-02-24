@@ -2765,7 +2765,12 @@ function syncPromotionTouchpointsFromForm(touchpoints = []) {
 function buildPromotionWizardTouchpointMarkup(touchpoint, index) {
   const template = normalizePromotionTemplateConfig(touchpoint.templateConfig || touchpoint.template || {});
   const touchpointLabel = index === 0 ? "Primary message" : `Reminder ${index}`;
-  return `<div class="panel detail-grid"><p><strong>${escapeHtml(touchpointLabel)}</strong></p><label>Send this message <input type="number" min="0" data-touchpoint-offset="${index}" value="${touchpoint.offsetDays}" /> days before the promotion ends.</label><label>Subject<input data-touchpoint-subject="${index}" value="${escapeHtml(template.subjectText)}" /></label><label>Intro<input data-touchpoint-intro="${index}" value="${escapeHtml(template.introText)}" /></label><label class="template-checkbox-row"><input type="checkbox" data-touchpoint-populate-name="${index}" ${template.populateName ? "checked" : ""} /><span>Populate name</span></label><label>Body<textarea rows="4" data-touchpoint-body="${index}">${escapeHtml(template.bodyText)}</textarea></label><label>Outro<input data-touchpoint-outro="${index}" value="${escapeHtml(template.outroText)}" /></label></div>`;
+  return `<article class="panel detail-grid promotion-wizard-message-card"><p class="promotion-wizard-card-title"><strong>${escapeHtml(touchpointLabel)}</strong></p><label>Subject<input data-touchpoint-subject="${index}" value="${escapeHtml(template.subjectText)}" /></label><label>Intro<input data-touchpoint-intro="${index}" value="${escapeHtml(template.introText)}" /></label><label class="template-checkbox-row"><input type="checkbox" data-touchpoint-populate-name="${index}" ${template.populateName ? "checked" : ""} /><span>Populate name</span></label><label>Body<textarea rows="4" data-touchpoint-body="${index}">${escapeHtml(template.bodyText)}</textarea></label><label>Outro<input data-touchpoint-outro="${index}" value="${escapeHtml(template.outroText)}" /></label></article>`;
+}
+
+function buildPromotionWizardTimingMarkup(touchpoint, index) {
+  const touchpointLabel = index === 0 ? "Primary message" : `Reminder ${index}`;
+  return `<div class="promotion-wizard-timing-row"><span class="promotion-wizard-timing-label">${escapeHtml(touchpointLabel)}:</span><label class="promotion-wizard-timing-sentence">Send this message <input class="promotion-wizard-offset-input" type="number" min="0" data-touchpoint-offset="${index}" value="${touchpoint.offsetDays}" /> days before this promotion ends.</label></div>`;
 }
 
 function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipelineDayStartTime = "09:00", leads, existingPromotion = null }) {
@@ -2963,7 +2968,7 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipeli
       }
 
       if (state.wizardStep === 2) {
-        viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Promotion</h2></div><div class="panel form-grid promotion-config-panel"><p>When would you like to inform people about this promotion?</p><div id="touchpoint-list" class="promotion-touchpoints-stack">${state.touchpoints.map((tp, index) => buildPromotionWizardTouchpointMarkup(tp, index)).join("")}</div><button id="add-touchpoint-btn" class="secondary-btn" type="button">+ Add reminder touchpoint</button><p>What would you like to say to them?</p><div class="button-row promotion-submit-row"><button id="promo-next-message-btn" type="button">Next</button></div></div></section>`;
+        viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Promotion</h2></div><div class="panel form-grid promotion-config-panel"><section class="promotion-wizard-block"><p class="promotion-wizard-section-label">When would you like to inform people about this promotion?</p><div id="touchpoint-timing-list" class="promotion-wizard-timing-list">${state.touchpoints.map((tp, index) => buildPromotionWizardTimingMarkup(tp, index)).join("")}</div><button id="add-touchpoint-btn" class="secondary-btn" type="button">+ Add reminder touchpoint</button></section><hr class="promotion-wizard-divider" /><section class="promotion-wizard-block"><h3 class="promotion-wizard-main-prompt">What would you like to say to them?</h3><div id="touchpoint-list" class="promotion-touchpoints-stack">${state.touchpoints.map((tp, index) => buildPromotionWizardTouchpointMarkup(tp, index)).join("")}</div></section><div class="button-row promotion-submit-row"><button id="promo-next-message-btn" type="button">Next</button></div></div></section>`;
 
         document.getElementById("add-touchpoint-btn")?.addEventListener("click", () => {
           syncFromWizardTouchpoints();
@@ -2988,7 +2993,7 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipeli
       }).join("");
       const cohortRows = leads.filter((lead) => state.cohortDraftLeadIds.has(lead.id));
 
-      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>Review Promotion</h2></div><div class="panel form-grid promotion-config-panel"><h3>Recap</h3><p><strong>Name:</strong> ${escapeHtml(state.name || "Untitled promo")}</p><p><strong>Ends:</strong> ${escapeHtml(endDate ? endDate.toLocaleString() : "-")}</p><div class="promotion-touchpoints-stack">${touchpointSummary}</div><h3>Cohort Preview</h3><p>Default cohort: <strong>All Active Leads</strong>. Snap Active behavior applies automatically to leads that qualify in your snap window.</p><p><strong>Selected leads:</strong> ${cohortRows.length}</p><div class="promotion-lead-list">${cohortRows.length ? cohortRows.map((lead) => `<article class="panel panel--lead"><p><strong>${escapeHtml(lead.name || "Unnamed")}</strong></p><p>${escapeHtml(lead.product || "No product")}</p></article>`).join("") : '<article class="panel panel--lead"><p>No leads selected yet.</p></article>'}</div><div class="button-row promotion-submit-row"><button id="create-promo-btn" type="button">Create Promotion</button></div><button type="button" id="open-custom-from-page3" class="link-btn">Customize cohort / targeting</button></div></section>`;
+      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>Review Promotion</h2></div><div class="panel form-grid promotion-config-panel"><h3>Recap</h3><p><strong>Name:</strong> ${escapeHtml(state.name || "Untitled promo")}</p><p><strong>Ends:</strong> ${escapeHtml(endDate ? endDate.toLocaleString() : "-")}</p><div class="promotion-touchpoints-stack">${touchpointSummary}</div><h3>Cohort Preview</h3><p>Default cohort: <strong>All Active Leads</strong>. Snap Active behavior applies automatically to leads that qualify in your snap window.</p><p><strong>Selected leads:</strong> ${cohortRows.length}</p><div class="promotion-lead-list">${cohortRows.length ? cohortRows.map((lead) => `<article class="panel panel--lead promotion-lead-list-item"><div><p><strong>${escapeHtml(lead.name || "Unnamed")}</strong></p><p>${escapeHtml(lead.product || "No product")}</p></div><button type="button" class="secondary-btn promotion-inline-remove-btn" data-remove-wizard-lead="${lead.id}" aria-label="Remove ${escapeHtml(lead.name || "lead")} from cohort">Remove</button></article>`).join("") : '<article class="panel panel--lead"><p>No leads selected yet.</p></article>'}</div><div class="button-row promotion-submit-row"><button id="create-promo-btn" type="button">Create Promotion</button></div><button type="button" id="open-custom-from-page3" class="link-btn">Customize cohort / targeting</button></div></section>`;
 
       document.getElementById("create-promo-btn")?.addEventListener("click", async () => {
         syncFromWizardTouchpoints();
@@ -2999,6 +3004,18 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipeli
         syncFromWizardTouchpoints();
         state.mode = "advanced";
         draw();
+      });
+
+      document.querySelectorAll("[data-remove-wizard-lead]").forEach((buttonEl) => {
+        buttonEl.addEventListener("click", () => {
+          const leadId = buttonEl.dataset.removeWizardLead;
+          if (!leadId) return;
+          state.cohortDraftLeadIds.delete(leadId);
+          delete state.selectionSourcesByLead[leadId];
+          delete state.snapModeByLead[leadId];
+          delete state.snapMatchByLead[leadId];
+          draw();
+        });
       });
       return;
     }
