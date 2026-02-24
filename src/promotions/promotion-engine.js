@@ -167,6 +167,63 @@ function logRestoreDecision({
   });
 }
 
+function logSnapOverwrite({ leadId, promotionId, snapMatch }) {
+  if (!isDevMode()) return;
+  console.info("[promotion-snap-overwrite]", {
+    leadId,
+    promotionId,
+    stageId: snapMatch?.stageId || null,
+    stageIndex: Number.isInteger(snapMatch?.stageIndex) ? snapMatch.stageIndex : null,
+    candidateDay: Number.isFinite(snapMatch?.candidateDay) ? snapMatch.candidateDay : null,
+    touchpointId: snapMatch?.touchpointId || null,
+    touchpointDay: Number.isFinite(snapMatch?.touchpointDay) ? snapMatch.touchpointDay : null,
+    dayDiff: Number.isFinite(snapMatch?.dayDiff) ? snapMatch.dayDiff : null,
+  });
+}
+
+function logSnapRestore({ leadId, promotionId, snapshot }) {
+  if (!isDevMode()) return;
+  console.info("[promotion-snap-restore]", {
+    leadId,
+    promotionId,
+    replacedStageId: snapshot?.replacedStageId || snapshot?.expectedSnapStageId || null,
+    replacedStageIndex: Number.isInteger(snapshot?.replacedStageIndex) ? snapshot.replacedStageIndex : null,
+    replacedCandidateDay: Number.isFinite(snapshot?.replacedCandidateDay)
+      ? snapshot.replacedCandidateDay
+      : Number.isFinite(snapshot?.matchedCandidateDay)
+      ? snapshot.matchedCandidateDay
+      : null,
+    matchedTouchpointId: snapshot?.matchedTouchpointId || null,
+    matchedTouchpointDay: Number.isFinite(snapshot?.matchedTouchpointDay) ? snapshot.matchedTouchpointDay : null,
+  });
+}
+
+function normalizeSnapMatchForPersistence(rawMatch = {}, pipelineStages = []) {
+  if (!rawMatch || typeof rawMatch !== "object") return null;
+  const stageId = rawMatch.stageId || null;
+  const stageIndexFromMatch = Number.isInteger(rawMatch.stageIndex) ? rawMatch.stageIndex : getStageIndexById(pipelineStages, stageId);
+  const stageIndex = Number.isInteger(stageIndexFromMatch) && stageIndexFromMatch >= 0 ? stageIndexFromMatch : -1;
+  const candidateDay = Number.isFinite(rawMatch.candidateDay) ? rawMatch.candidateDay : null;
+  const touchpointDay = Number.isFinite(rawMatch.touchpointDay) ? rawMatch.touchpointDay : null;
+  const touchpointOrder = Number.isFinite(rawMatch.touchpointOrder) ? rawMatch.touchpointOrder : 0;
+  const dayDiff = Number.isFinite(rawMatch.dayDiff) ? rawMatch.dayDiff : null;
+
+  if (!stageId || !Number.isFinite(candidateDay) || !rawMatch.touchpointId || !Number.isFinite(touchpointDay)) {
+    return null;
+  }
+
+  return {
+    leadId: rawMatch.leadId || null,
+    stageId,
+    stageIndex,
+    candidateDay,
+    touchpointId: rawMatch.touchpointId,
+    touchpointDay,
+    touchpointOrder,
+    dayDiff,
+  };
+}
+
 function computeRecalculatedStageTimestamp({
   pipelineSettings,
   replacedStageId,
@@ -226,6 +283,12 @@ async function restoreLeadFromPromotionSnapshot({ leadRef, leadData = {}, snapsh
     pipelineHashMismatch,
   });
 
+  logSnapRestore({
+    leadId: snapshot.leadId || null,
+    promotionId: snapshot.promotionId || leadData.snappedPromotionId || null,
+    snapshot,
+  });
+
   await updateDoc(leadRef, {
     stageId: replacedStageId,
     stageStatus: "pending",
@@ -252,6 +315,7 @@ async function createPromotion({
   presetLabel = "Custom",
   snapModeByLead = {},
   selectionSourcesByLead = {},
+  snapMatchByLead = {},
 }) {
   const endDate = toPromotionDate(promotion.endDate);
   if (!endDate) throw new Error("Invalid end date");
@@ -266,6 +330,7 @@ async function createPromotion({
       leadIds: selectedLeads.map((lead) => lead.id),
       snapModeByLead,
       selectionSourcesByLead,
+      snapMatchByLead,
       presetKey: promotion.presetKey || "custom",
       presetLabel,
       status: "active",
@@ -308,9 +373,15 @@ async function createPromotion({
 
   for (const lead of selectedLeads) {
     const snapEligible = wasAddedViaSnapActive(selectionSourcesByLead, lead.id);
-    const snapMatch = snapEligible ? findSnapMatch(lead, promotion.touchpoints, endDate, snapWindowDays, pipelineStages) : null;
+    const persistedSnapMatch = normalizeSnapMatchForPersistence(snapMatchByLead?.[lead.id], pipelineStages);
+    const computedSnapMatch = snapEligible
+      ? normalizeSnapMatchForPersistence(findSnapMatch(lead, promotion.touchpoints, endDate, snapWindowDays, pipelineStages), pipelineStages)
+      : null;
+    const snapMatch = persistedSnapMatch || computedSnapMatch;
     if (snapEligible && snapMatch) {
-      const replacedStageIndex = getStageIndexById(pipelineStages, snapMatch.stageId);
+      const replacedStageIndex = Number.isInteger(snapMatch.stageIndex) && snapMatch.stageIndex >= 0
+        ? snapMatch.stageIndex
+        : getStageIndexById(pipelineStages, snapMatch.stageId);
       const previousStageId = replacedStageIndex > 0 ? pipelineStages[replacedStageIndex - 1]?.id || null : null;
       const snapshotPayload = {
         leadId: lead.id,
@@ -319,6 +390,10 @@ async function createPromotion({
         replacedStageId: snapMatch.stageId || null,
         replacedStageIndex,
         previousStageId,
+        replacedCandidateDay: snapMatch.candidateDay,
+        matchedTouchpointId: snapMatch.touchpointId,
+        matchedTouchpointDay: snapMatch.touchpointDay,
+        snapMatchDayDiff: snapMatch.dayDiff,
         originalStageId: lead.stageId || null,
         originalScheduledDate: toSnapshotTimestamp(lead.nextActionAt),
         lastCompletedNonPromoStageAt: toSnapshotTimestamp(lead.lastActionAt),
@@ -334,6 +409,7 @@ async function createPromotion({
       };
       if (snapMatch.stageId) snapshotPayload.expectedSnapStageId = snapMatch.stageId;
       if (snapMatch.candidateDay) snapshotPayload.expectedSnapScheduledDate = Timestamp.fromDate(new Date(snapMatch.candidateDay));
+      logSnapOverwrite({ leadId: lead.id, promotionId: promotionRef.id, snapMatch });
       try {
         await setDoc(doc(db, "users", userId, "promotions", promotionRef.id, "snapshots", lead.id), snapshotPayload);
         await updateDoc(doc(db, "users", userId, "leads", lead.id), {
@@ -341,6 +417,9 @@ async function createPromotion({
             promotionId: promotionRef.id,
             replacedStageId: snapMatch.stageId || null,
             replacedStageIndex,
+            replacedCandidateDay: snapMatch.candidateDay,
+            matchedTouchpointId: snapMatch.touchpointId,
+            matchedTouchpointDay: snapMatch.touchpointDay,
             previousStageId,
             snapWindowDays: Math.max(0, Number(snapWindowDays) || 0),
             addedViaSnapActive: true,
