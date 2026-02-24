@@ -70,6 +70,36 @@ function buildPromotionEvents(promotionId, lead, touchpoints, endDate, snappedSt
   });
 }
 
+function buildPromotionTouchpointEvent({ promotionId, promotionName, touchpoint, endDate }) {
+  const scheduledDate = computeTouchpointDate(endDate, touchpoint.offsetDays);
+  const scheduledFor = Timestamp.fromDate(scheduledDate);
+  const touchpointName = touchpoint.name || `Touchpoint ${Number(touchpoint.order || 0) + 1}`;
+  const title = clampString(`${promotionName || "Promotion"} — ${touchpointName}`, 200);
+
+  return {
+    id: `promotion_${promotionId}_touchpoint_${touchpoint.id}`,
+    type: "promotion_touchpoint",
+    promotionId,
+    touchpointId: touchpoint.id,
+    touchpointOrder: touchpoint.order,
+    touchpointName,
+    template: touchpoint.template,
+    templateConfig: touchpoint.templateConfig || touchpoint.template,
+    offsetDays: touchpoint.offsetDays,
+    title,
+    name: title,
+    summary: clampString(`${promotionName || "Promotion"} · ${touchpointName}`, 5000),
+    scheduledFor,
+    nextActionAt: scheduledFor,
+    completed: false,
+    archived: false,
+    deleted: false,
+    status: "open",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+}
+
 function toSnapshotTimestamp(value) {
   if (!value) return null;
   if (typeof value?.toDate === "function") return value;
@@ -249,6 +279,33 @@ async function createPromotion({
 
   const pipelineSettingsHash = computePipelineSettingsHash({ stages: pipelineStages });
 
+  for (const touchpoint of promotion.touchpoints) {
+    const touchpointEvent = buildPromotionTouchpointEvent({
+      promotionId: promotionRef.id,
+      promotionName: promotion.name,
+      touchpoint,
+      endDate,
+    });
+
+    try {
+      const { id, ...payload } = touchpointEvent;
+      await setDoc(doc(db, "users", userId, "events", id), payload, { merge: true });
+      await setDoc(
+        doc(db, "users", userId, "promotions", promotionRef.id, "touchpoints", touchpoint.id),
+        {
+          promotionId: promotionRef.id,
+          touchpointId: touchpoint.id,
+          touchpointOrder: touchpoint.order,
+          touchpointName: touchpoint.name || `Touchpoint ${Number(touchpoint.order || 0) + 1}`,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (error) {
+      throw permissionError(`promotion touchpoint event create for ${touchpoint.id}`, error);
+    }
+  }
+
   for (const lead of selectedLeads) {
     const snapEligible = wasAddedViaSnapActive(selectionSourcesByLead, lead.id);
     const snapMatch = snapEligible ? findSnapMatch(lead, promotion.touchpoints, endDate, snapWindowDays, pipelineStages) : null;
@@ -296,16 +353,38 @@ async function createPromotion({
       }
     }
 
-    const leadSnapMode = snapModeByLead?.[lead.id] || null;
-    const events = buildPromotionEvents(promotionRef.id, lead, promotion.touchpoints, endDate, snapMatch?.stageId || null, leadSnapMode).map((event) => ({
-      ...event,
-      snapEligible,
-    }));
-    for (const event of events) {
+    for (const touchpoint of promotion.touchpoints) {
+      const statusRef = doc(
+        db,
+        "users",
+        userId,
+        "promotions",
+        promotionRef.id,
+        "touchpoints",
+        touchpoint.id,
+        "statuses",
+        lead.id
+      );
+
       try {
-        await addDoc(collection(db, "users", userId, "events"), event);
+        await setDoc(
+          statusRef,
+          {
+            leadId: lead.id,
+            touchpointId: touchpoint.id,
+            promotionId: promotionRef.id,
+            status: "open",
+            completed: false,
+            skipped: false,
+            snapEligible,
+            snapMode: snapModeByLead?.[lead.id] || null,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
       } catch (error) {
-        throw permissionError(`promotion event create for lead ${lead.id}`, error);
+        throw permissionError(`promotion status create for lead ${lead.id}`, error);
       }
     }
   }
@@ -360,6 +439,24 @@ async function restoreSnappedLeadsAndDeletePromotion({ db, userId, promotionId }
       await deleteDoc(eventDoc.ref);
     } catch (error) {
       throw deletionError(`promotion event delete ${eventDoc.id}`, error);
+    }
+  }
+
+  const touchpointsSnapshot = await getDocs(collection(db, "users", userId, "promotions", promotionId, "touchpoints"));
+  for (const touchpointDoc of touchpointsSnapshot.docs) {
+    const statusesSnapshot = await getDocs(collection(touchpointDoc.ref, "statuses"));
+    for (const statusDoc of statusesSnapshot.docs) {
+      try {
+        await deleteDoc(statusDoc.ref);
+      } catch (error) {
+        throw deletionError(`promotion status delete ${statusDoc.id}`, error);
+      }
+    }
+
+    try {
+      await deleteDoc(touchpointDoc.ref);
+    } catch (error) {
+      throw deletionError(`promotion touchpoint delete ${touchpointDoc.id}`, error);
     }
   }
 
@@ -444,4 +541,97 @@ async function restoreExpiredPromotionStageReplacements({ db, userId, asOfDate =
   return restoredCount;
 }
 
-export { createPromotion, restoreSnappedLeadsAndDeletePromotion, restoreExpiredPromotionStageReplacements };
+async function syncPromotionTouchpointContainers({ db, userId, promotionId, promotion }) {
+  const endDate = toPromotionDate(promotion?.endDate);
+  if (!endDate) throw new Error("Invalid end date");
+
+  const touchpoints = Array.isArray(promotion?.touchpoints) ? promotion.touchpoints : [];
+  const leadIds = Array.isArray(promotion?.leadIds) ? promotion.leadIds : [];
+
+  const existingEventsSnapshot = await getDocs(
+    query(collection(db, "users", userId, "events"), where("promotionId", "==", promotionId))
+  );
+  const existingTouchpointEvents = existingEventsSnapshot.docs
+    .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+    .filter((event) => event.type === "promotion_touchpoint");
+
+  const desiredIds = new Set();
+
+  for (const touchpoint of touchpoints) {
+    const touchpointEvent = buildPromotionTouchpointEvent({
+      promotionId,
+      promotionName: promotion?.name,
+      touchpoint,
+      endDate,
+    });
+
+    desiredIds.add(touchpointEvent.id);
+    const { id, ...payload } = touchpointEvent;
+    await setDoc(doc(db, "users", userId, "events", id), payload, { merge: true });
+    await setDoc(
+      doc(db, "users", userId, "promotions", promotionId, "touchpoints", touchpoint.id),
+      {
+        promotionId,
+        touchpointId: touchpoint.id,
+        touchpointOrder: touchpoint.order,
+        touchpointName: touchpoint.name || `Touchpoint ${Number(touchpoint.order || 0) + 1}`,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    const statusCollectionRef = collection(
+      db,
+      "users",
+      userId,
+      "promotions",
+      promotionId,
+      "touchpoints",
+      touchpoint.id,
+      "statuses"
+    );
+    const existingStatusesSnapshot = await getDocs(statusCollectionRef);
+    const existingByLeadId = new Map(
+      existingStatusesSnapshot.docs.map((statusDoc) => [statusDoc.id, { ref: statusDoc.ref, ...statusDoc.data() }])
+    );
+
+    for (const leadId of leadIds) {
+      await setDoc(
+        doc(statusCollectionRef, leadId),
+        {
+          leadId,
+          touchpointId: touchpoint.id,
+          promotionId,
+          status: existingByLeadId.get(leadId)?.status || "open",
+          completed: existingByLeadId.get(leadId)?.completed === true,
+          skipped: existingByLeadId.get(leadId)?.status === "skipped" || existingByLeadId.get(leadId)?.skipped === true,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+
+    for (const [statusLeadId, existingStatus] of existingByLeadId.entries()) {
+      if (leadIds.includes(statusLeadId)) continue;
+      await deleteDoc(existingStatus.ref);
+    }
+  }
+
+  for (const existingEvent of existingTouchpointEvents) {
+    if (desiredIds.has(existingEvent.id)) continue;
+    await deleteDoc(doc(db, "users", userId, "events", existingEvent.id));
+  }
+
+  const touchpointsSnapshot = await getDocs(collection(db, "users", userId, "promotions", promotionId, "touchpoints"));
+  const desiredTouchpointIds = new Set(touchpoints.map((touchpoint) => touchpoint.id));
+  for (const touchpointDoc of touchpointsSnapshot.docs) {
+    if (desiredTouchpointIds.has(touchpointDoc.id)) continue;
+    const statusesSnapshot = await getDocs(collection(touchpointDoc.ref, "statuses"));
+    for (const statusDoc of statusesSnapshot.docs) {
+      await deleteDoc(statusDoc.ref);
+    }
+    await deleteDoc(touchpointDoc.ref);
+  }
+}
+
+export { createPromotion, restoreSnappedLeadsAndDeletePromotion, restoreExpiredPromotionStageReplacements, syncPromotionTouchpointContainers };

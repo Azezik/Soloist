@@ -80,10 +80,11 @@ export function normalizeCalendarItems(tasks, leads, promotionEvents = []) {
     .map((event) => {
       const date = toDate(event.scheduledFor || event.nextActionAt);
       if (!date) return null;
+      const itemType = event.type === "promotion_touchpoint" ? "promotion_touchpoint" : "promotion";
       return {
         id: event.id,
-        type: "promotion",
-        title: event.name || "Promotion",
+        type: itemType,
+        title: event.title || event.name || "Promotion",
         secondary: "Promotion",
         date,
         dayKey: toDayKey(date),
