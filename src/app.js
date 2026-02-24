@@ -30,7 +30,7 @@ import { getAppSettings, getPipelineSettings, pipelineSettingsRef } from "./data
 import { renderCalendarScreen } from "./calendar/calendar-screen.js";
 import { rescheduleLeadAction } from "./data/calendar-service.js";
 import { PROMOTION_PRESETS, buildPromotionTouchpoints, toPromotionDate } from "./promotions/presets.js";
-import { computeTargetLeads, isLeadActive, qualifiesForSnap } from "./promotions/snap-engine.js";
+import { computeTargetLeads, findSnapMatch, isLeadActive } from "./promotions/snap-engine.js";
 import {
   createPromotion,
   restoreExpiredPromotionStageReplacements,
@@ -2730,6 +2730,7 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
     searchResults: [],
     snapModeByLead: { ...(existingPromotion?.snapModeByLead || {}) },
     selectionSourcesByLead: { ...(existingPromotion?.selectionSourcesByLead || {}) },
+    snapMatchByLead: { ...(existingPromotion?.snapMatchByLead || {}) },
   };
 
   if (state.isEdit) state.page = 2;
@@ -2843,6 +2844,7 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
           state.cohortDraftLeadIds.delete(leadId);
           delete state.selectionSourcesByLead[leadId];
           delete state.snapModeByLead[leadId];
+          delete state.snapMatchByLead[leadId];
           renderCohortPreview();
         });
       });
@@ -2857,7 +2859,18 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
         let additions = [];
         if (group === "all_active") additions = leads.filter((lead) => isLeadActive(lead));
         if (group === "drop_out") additions = leads.filter((lead) => isLeadDropOutState(lead));
-        if (group === "snap_active") additions = leads.filter((lead) => qualifiesForSnap(lead, state.touchpoints, endDate, snapWindowDays, pipelineStages));
+        if (group === "snap_active") {
+          const matchedLeads = leads
+            .map((lead) => ({
+              lead,
+              match: findSnapMatch(lead, state.touchpoints, endDate, snapWindowDays, pipelineStages),
+            }))
+            .filter((entry) => entry.match);
+          additions = matchedLeads.map((entry) => entry.lead);
+          matchedLeads.forEach((entry) => {
+            state.snapMatchByLead[entry.lead.id] = entry.match;
+          });
+        }
         addLeadsToCohort(additions, group || "manual");
         renderCohortPreview();
       });
@@ -2867,6 +2880,7 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
       state.cohortDraftLeadIds = new Set();
       state.selectionSourcesByLead = {};
       state.snapModeByLead = {};
+      state.snapMatchByLead = {};
       renderCohortPreview();
     });
 
@@ -2909,6 +2923,7 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
             leadIds: leadIdsPayload,
             selectionSourcesByLead: state.selectionSourcesByLead,
             snapModeByLead: state.snapModeByLead,
+            snapMatchByLead: state.snapMatchByLead,
             updatedAt: serverTimestamp(),
           });
           await syncPromotionTouchpointContainers({
@@ -2942,6 +2957,7 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], leads,
           presetLabel: PROMOTION_PRESETS[state.presetKey]?.label || "Custom",
           snapModeByLead: state.snapModeByLead,
           selectionSourcesByLead: state.selectionSourcesByLead,
+          snapMatchByLead: state.snapMatchByLead,
         });
 
         await renderPromotionsPage();
