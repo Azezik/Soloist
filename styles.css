@@ -1041,8 +1041,9 @@ select {
 
 .calendar-day-block {
   position: absolute;
-  left: 0;
-  right: 0;
+  left: calc(var(--day-block-left, 0%) + 1px);
+  width: calc(var(--day-block-width, 100%) - 2px);
+  right: auto;
   min-height: calc(48 * var(--day-minute-height) * 1px);
   border: 1px solid var(--crm-border);
   padding: 0.35rem 0.45rem;

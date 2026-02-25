@@ -32,6 +32,7 @@ const VIEW_WEEK = "week";
 const VIEW_DAY = "day";
 const SNAP_MINUTES = 15;
 const DEFAULT_DROP_TIME = { hour: 8, minute: 30 };
+const DAY_VIEW_BLOCK_DURATION_MINUTES = 60;
 
 function escapeHtml(value = "") {
   return String(value)
@@ -464,10 +465,12 @@ function renderDayView(state) {
         .join("")
     : '<p class="calendar-empty">No all-day items</p>';
 
+  const timelineLayout = computeDayOverlapLayout(timed);
   const timelineEventsMarkup = timed
     .map((item) => {
       const minutes = item.date.getHours() * 60 + item.date.getMinutes();
-      return `<button type="button" ${renderDragAttributes(item)} class="calendar-day-block ${getItemClass(item.type)} ${getProjectedClass(item)}" style="top: calc(var(--day-minute-height) * ${minutes}px);" data-open-item="${
+      const layout = timelineLayout.get(item) || { left: 0, width: 100 };
+      return `<button type="button" ${renderDragAttributes(item)} class="calendar-day-block ${getItemClass(item.type)} ${getProjectedClass(item)}" style="top: calc(var(--day-minute-height) * ${minutes}px); --day-block-left: ${layout.left}%; --day-block-width: ${layout.width}%;" data-open-item="${
         item.path
       }"><p>${escapeHtml(item.title)}</p><small>${escapeHtml(
         formatTimeLabel(item.date)
@@ -540,6 +543,60 @@ function renderDayView(state) {
       openItem(itemEl.dataset.openItem, state);
     });
   });
+}
+
+function computeDayOverlapLayout(items) {
+  const entries = items
+    .map((item, index) => {
+      const start = item.date.getHours() * 60 + item.date.getMinutes();
+      return {
+        item,
+        start,
+        end: start + DAY_VIEW_BLOCK_DURATION_MINUTES,
+        index,
+      };
+    })
+    .sort((a, b) => (a.start === b.start ? a.index - b.index : a.start - b.start));
+
+  const layout = new Map();
+  if (!entries.length) return layout;
+
+  const columns = [];
+  entries.forEach((entry) => {
+    let assignedColumn = 0;
+    while (columns[assignedColumn] && columns[assignedColumn] > entry.start) {
+      assignedColumn += 1;
+    }
+
+    columns[assignedColumn] = entry.end;
+    entry.column = assignedColumn;
+  });
+
+  let groupStart = 0;
+  while (groupStart < entries.length) {
+    let groupEnd = groupStart + 1;
+    let groupMaxEnd = entries[groupStart].end;
+
+    while (groupEnd < entries.length && entries[groupEnd].start < groupMaxEnd) {
+      groupMaxEnd = Math.max(groupMaxEnd, entries[groupEnd].end);
+      groupEnd += 1;
+    }
+
+    const groupItems = entries.slice(groupStart, groupEnd);
+    const columnCount = Math.max(1, ...groupItems.map((item) => item.column + 1));
+    const width = 100 / columnCount;
+
+    groupItems.forEach((entry) => {
+      layout.set(entry.item, {
+        left: entry.column * width,
+        width,
+      });
+    });
+
+    groupStart = groupEnd;
+  }
+
+  return layout;
 }
 
 function renderByView(state) {
