@@ -10,6 +10,7 @@
   --lead-border: #2459ff;
   --task-border: #d1001f;
   --promotion-border: #17a34a;
+  --sequence-border: #1f6f6f;
   --demo-green: #2ed97e;
   --demo-blue: #3f7cff;
 }
@@ -614,6 +615,12 @@ button:active {
   border-width: 1px;
 }
 
+.crm-view .feed-item--sequence,
+.crm-view .panel--sequence {
+  border-color: var(--sequence-border);
+  border-width: 1px;
+}
+
 .crm-view button,
 .crm-view input,
 .crm-view textarea,
@@ -675,6 +682,12 @@ select {
 .feed-item--promotion,
 .panel--promo {
   border-color: var(--promotion-border);
+  border-width: 1px;
+}
+
+.feed-item--sequence,
+.panel--sequence {
+  border-color: var(--sequence-border);
   border-width: 1px;
 }
 
@@ -1185,6 +1198,23 @@ select {
   font-size: 0.9rem;
 }
 
+
+.sequence-offset-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: nowrap;
+}
+
+.sequence-offset-row span {
+  white-space: nowrap;
+}
+
+.sequence-readonly-input {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+}
+
 .calendar-chip-list {
   display: flex;
   flex-direction: column;
@@ -1231,6 +1261,15 @@ select {
   border-color: #23b57f;
 }
 
+.calendar-chip.calendar-item--sequence,
+.calendar-day-list-item.calendar-item--sequence,
+.calendar-allday-item.calendar-item--sequence,
+.calendar-week-event.calendar-item--sequence,
+.calendar-day-block.calendar-item--sequence {
+  background: rgba(31, 111, 111, 0.24);
+  border-color: #1f6f6f;
+}
+
 .calendar-item--task {
   background: rgba(209, 0, 31, 0.2);
   border-color: #d1001f;
@@ -1244,6 +1283,11 @@ select {
 .calendar-item--promotion {
   background: rgba(35, 181, 127, 0.2);
   border-color: #23b57f;
+}
+
+.calendar-item--sequence {
+  background: rgba(31, 111, 111, 0.2);
+  border-color: #1f6f6f;
 }
 
 .calendar-item--projected {

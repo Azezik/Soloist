@@ -1,4 +1,4 @@
-import { addDoc, collection, doc, serverTimestamp, setDoc, Timestamp, updateDoc } from "../data/firestore-service.js";
+import { addDoc, collection, doc, getDoc, serverTimestamp, setDoc, Timestamp, updateDoc } from "../data/firestore-service.js";
 import { normalizePromotionTemplateConfig, toPromotionTemplatePayload } from "../templates/module.js";
 
 function clampString(value, maxLen) {
@@ -17,6 +17,8 @@ function normalizeSequenceSteps(rawSteps = []) {
         order,
         name: String(step?.name || `Step ${order + 1}`) || `Step ${order + 1}`,
         delayDaysFromPrevious: order === 0 ? 0 : (Number.isNaN(delayDays) ? 0 : Math.max(0, delayDays)),
+        triggerImmediatelyAfterPrevious: order > 0 && step?.triggerImmediatelyAfterPrevious === true,
+        useContactEmail: step?.useContactEmail === true,
         toEmail: String(step?.toEmail || "").trim(),
         template: toPromotionTemplatePayload(templateConfig),
         templateConfig,
@@ -70,7 +72,10 @@ export async function createSequence({ db, userId, sequence, contactId = null })
 
   for (let index = 0; index < steps.length; index += 1) {
     const step = steps[index];
-    const scheduledFor = Timestamp.fromDate(scheduledDates[index] || new Date());
+    const previousStep = index > 0 ? steps[index - 1] : null;
+    const isLockedUntilPreviousComplete = index > 0 && previousStep?.triggerImmediatelyAfterPrevious === true;
+    const scheduledForDate = scheduledDates[index] || new Date();
+    const scheduledFor = isLockedUntilPreviousComplete ? null : Timestamp.fromDate(scheduledForDate);
     const eventId = `sequence_${sequenceRef.id}_step_${step.id}`;
     await setDoc(doc(db, "users", userId, "events", eventId), {
       type: "sequence_step",
@@ -79,6 +84,8 @@ export async function createSequence({ db, userId, sequence, contactId = null })
       stepOrder: step.order,
       stepName: step.name || `Step ${step.order + 1}`,
       toEmail: step.toEmail || "",
+      useContactEmail: step.useContactEmail === true,
+      triggerImmediatelyAfterPrevious: step.triggerImmediatelyAfterPrevious === true,
       template: step.template,
       templateConfig: step.templateConfig || step.template,
       title: clampString(`${sequence.name || "Sequence"} — ${step.name || `Step ${step.order + 1}`}`, 200),
@@ -86,6 +93,7 @@ export async function createSequence({ db, userId, sequence, contactId = null })
       summary: clampString(`${sequence.name || "Sequence"} · ${step.name || `Step ${step.order + 1}`}`, 5000),
       scheduledFor,
       nextActionAt: scheduledFor,
+      blockedUntilPreviousComplete: isLockedUntilPreviousComplete,
       completed: false,
       archived: false,
       deleted: false,
@@ -136,4 +144,23 @@ export async function markSequenceStepStatus({ db, userId, event, status }) {
     skippedAt: status === "skipped" ? now : null,
     updatedAt: now,
   }, { merge: true });
+
+  if (status !== "completed") return;
+
+  const sequenceSnapshot = await getDoc(doc(db, "users", userId, "sequences", event.sequenceId));
+  const sequence = sequenceSnapshot.exists() ? sequenceSnapshot.data() : null;
+  const orderedSteps = normalizeSequenceSteps(sequence?.steps || []);
+  const currentIndex = orderedSteps.findIndex((entry) => entry.id === event.stepId);
+  if (currentIndex < 0 || currentIndex >= orderedSteps.length - 1) return;
+  const nextStep = orderedSteps[currentIndex + 1];
+  if (nextStep?.triggerImmediatelyAfterPrevious !== true) return;
+
+  const nextEventId = `sequence_${event.sequenceId}_step_${nextStep.id}`;
+  const nowTimestamp = Timestamp.now();
+  await updateDoc(doc(db, "users", userId, "events", nextEventId), {
+    scheduledFor: nowTimestamp,
+    nextActionAt: nowTimestamp,
+    blockedUntilPreviousComplete: false,
+    updatedAt: serverTimestamp(),
+  });
 }

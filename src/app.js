@@ -670,6 +670,50 @@ async function pushLeadFromPreset({ userId, entityId, leadSource, preset }) {
   });
 }
 
+async function pushSequenceStepFromPreset({ userId, eventId, preset }) {
+  const pushedAt = computePushedTimestamp(new Date(), preset);
+  const eventRef = doc(db, "users", userId, "events", eventId);
+  const eventSnapshot = await getDoc(eventRef);
+  if (!eventSnapshot.exists()) return;
+
+  const event = { id: eventSnapshot.id, ...eventSnapshot.data() };
+  if (!event.sequenceId || !event.stepId) return;
+
+  const sequenceSnapshot = await getDoc(doc(db, "users", userId, "sequences", event.sequenceId));
+  if (!sequenceSnapshot.exists()) return;
+  const sequence = sequenceSnapshot.data() || {};
+  const orderedSteps = (Array.isArray(sequence.steps) ? sequence.steps : [])
+    .map((step, index) => ({ ...step, order: Number.isInteger(step?.order) ? step.order : index }))
+    .sort((a, b) => a.order - b.order);
+  const anchorIndex = orderedSteps.findIndex((step) => step.id === event.stepId);
+  if (anchorIndex < 0) return;
+
+  const now = serverTimestamp();
+  let cursorDate = pushedAt.toDate();
+
+  for (let index = anchorIndex; index < orderedSteps.length; index += 1) {
+    const step = orderedSteps[index];
+    if (index > anchorIndex) {
+      const previousStep = orderedSteps[index - 1];
+      if (previousStep?.triggerImmediatelyAfterPrevious === true) {
+        continue;
+      }
+      const offsetDays = Math.max(0, Number(step.delayDaysFromPrevious) || 0);
+      cursorDate = new Date(cursorDate);
+      cursorDate.setDate(cursorDate.getDate() + offsetDays);
+    }
+
+    const stepEventId = `sequence_${event.sequenceId}_step_${step.id}`;
+    const stepRef = doc(db, "users", userId, "events", stepEventId);
+    await updateDoc(stepRef, {
+      scheduledFor: Timestamp.fromDate(cursorDate),
+      nextActionAt: Timestamp.fromDate(cursorDate),
+      blockedUntilPreviousComplete: false,
+      updatedAt: now,
+    });
+  }
+}
+
 async function addTimelineNote({ contactId = null, parentType = "contact", parentId = null, noteText = "" }) {
   const trimmed = String(noteText || "").trim();
   if (!trimmed) return;
@@ -882,7 +926,11 @@ async function renderDashboard() {
     if (item.type === "promotion" || item.type === "sequence") {
       const eventPath = item.type === "sequence" ? `#sequence-event/${item.id}` : `#promotion-event/${item.id}`;
       const label = item.type === "sequence" ? "Sequence" : "Promotion";
-      return `<article class="panel feed-item feed-item-clickable feed-item--promotion" data-open-feed-item="true" data-feed-type="${item.type}" data-feed-id="${item.id}" tabindex="0" role="button"><p class="feed-type">${label}</p><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p><p><strong>Due:</strong> ${formatDate(item.dueAt)}</p><div class="button-row">${item.isContainer ? '<a class="timeline-link-pill" href="' + appendOriginToHash(eventPath, window.location.hash) + '">Open</a>' : `<button type="button" class="dashboard-action-btn" data-promo-event-done="${item.id}">Done</button>`}</div></article>`;
+      const feedClass = item.type === "sequence" ? "feed-item--sequence" : "feed-item--promotion";
+      const actionsMarkup = item.type === "sequence"
+        ? `<button type="button" class="dashboard-action-btn" data-promo-event-done="${item.id}">Done</button><details class="push-menu"><summary class="dashboard-action-btn">Push</summary><div class="push-dropdown" data-push-entity="sequence" data-push-id="${item.id}">${pushOptionsMarkup}</div></details>`
+        : (item.isContainer ? '<a class="timeline-link-pill" href="' + appendOriginToHash(eventPath, window.location.hash) + '">Open</a>' : `<button type="button" class="dashboard-action-btn" data-promo-event-done="${item.id}">Done</button>`);
+      return `<article class="panel feed-item feed-item-clickable ${feedClass}" data-open-feed-item="true" data-feed-type="${item.type}" data-feed-id="${item.id}" tabindex="0" role="button"><p class="feed-type">${label}</p><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p><p><strong>Due:</strong> ${formatDate(item.dueAt)}</p><div class="button-row">${actionsMarkup}</div></article>`;
     }
 
     return `<article class="panel feed-item feed-item-clickable feed-item--task" data-open-feed-item="true" data-feed-type="task" data-feed-id="${item.id}" tabindex="0" role="button"><p class="feed-type">Task</p><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p><p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ""}<div class="button-row"><button type="button" class="dashboard-action-btn" data-task-action="done" data-task-id="${item.id}">Done</button><details class="push-menu"><summary class="dashboard-action-btn">Push</summary><div class="push-dropdown" data-push-entity="task" data-push-id="${item.id}">${pushOptionsMarkup}</div></details></div></article>`;
@@ -970,6 +1018,8 @@ async function renderDashboard() {
           scheduledFor: pushedAt,
           updatedAt: serverTimestamp(),
         }, { merge: true });
+      } else if (entityType === "sequence") {
+        await pushSequenceStepFromPreset({ userId: currentUser.uid, eventId: entityId, preset });
       } else {
         if (!leadSource) return;
         await pushLeadFromPreset({ userId: currentUser.uid, entityId, leadSource, preset });
@@ -1560,9 +1610,10 @@ async function renderLeadsPage() {
 async function renderTasksPage() {
   renderLoading("Loading tasks...");
 
-  const [contactsSnapshot, tasksSnapshot] = await Promise.all([
+  const [contactsSnapshot, tasksSnapshot, sequenceEventsSnapshot] = await Promise.all([
     getDocs(collection(db, "users", currentUser.uid, "contacts")),
     getDocs(collection(db, "users", currentUser.uid, "tasks")),
+    getDocs(collection(db, "users", currentUser.uid, "events")),
   ]);
 
   const contactById = contactsSnapshot.docs.reduce((acc, contactDoc) => {
@@ -1573,6 +1624,10 @@ async function renderTasksPage() {
   const allTasks = tasksSnapshot.docs
     .map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }))
     .filter((task) => isActiveRecord(task));
+  const allSequenceSteps = sequenceEventsSnapshot.docs
+    .map((eventDoc) => ({ id: eventDoc.id, ...eventDoc.data() }))
+    .filter((event) => isActiveRecord(event) && (event.type === "sequence" || event.type === "sequence_step" || Boolean(event.sequenceId)));
+
 
   const getTaskLastSavedTime = (task) =>
     Math.max(toDate(task.updatedAt)?.getTime() || 0, toDate(task.createdAt)?.getTime() || 0);
@@ -1591,6 +1646,14 @@ async function renderTasksPage() {
     .filter((task) => task.completed)
     .sort((a, b) => getTaskSortTime(b) - getTaskSortTime(a));
 
+  const getSequenceSortTime = (entry) => toDate(entry.scheduledFor || entry.nextActionAt)?.getTime() || 0;
+  const activeSequenceSteps = allSequenceSteps
+    .filter((entry) => !entry.completed && entry.status !== "skipped")
+    .sort((a, b) => getSequenceSortTime(b) - getSequenceSortTime(a));
+  const completedSequenceSteps = allSequenceSteps
+    .filter((entry) => entry.completed || entry.status === "skipped")
+    .sort((a, b) => getSequenceSortTime(b) - getSequenceSortTime(a));
+
   const renderTaskCard = (task) => {
     const linkedContact = task.contactId ? contactById[task.contactId] : null;
     return `
@@ -1603,6 +1666,19 @@ async function renderTasksPage() {
     `;
   };
 
+  const renderSequenceCard = (entry) => {
+    const linkedContact = entry.contactId ? contactById[entry.contactId] : null;
+    const statusText = entry.status === "skipped" ? "Completed" : (entry.completed ? "Completed" : "Active");
+    return `
+      <button class="panel feed-item feed-item--sequence" data-sequence-event-id="${entry.id}" type="button">
+        <h3>${escapeHtml(entry.title || entry.name || entry.stepName || "Sequence Step")}</h3>
+        <p><strong>Scheduled:</strong> ${entry.scheduledFor ? formatDate(entry.scheduledFor) : "Pending previous step"}</p>
+        <p><strong>Contact:</strong> ${escapeHtml(linkedContact?.name || "No contact")}</p>
+        <p><strong>Status:</strong> ${statusText}</p>
+      </button>
+    `;
+  };
+
   viewContainer.innerHTML = `
     <section class="crm-view crm-view--tasks">
       <div class="view-header">
@@ -1611,18 +1687,19 @@ async function renderTasksPage() {
       </div>
       <div class="feed-list">
         ${
-          activeTasks.length
-            ? activeTasks.map((task) => renderTaskCard(task)).join("")
+          activeTasks.length || activeSequenceSteps.length
+            ? `${activeTasks.map((task) => renderTaskCard(task)).join("")}${activeSequenceSteps.map((entry) => renderSequenceCard(entry)).join("")}`
             : '<p class="view-message">No active tasks.</p>'
         }
 
         ${
-          completedTasks.length
+          completedTasks.length || completedSequenceSteps.length
             ? `
               <div class="tasks-divider" role="separator" aria-label="Completed Tasks section">
                 <h3>Completed Tasks</h3>
               </div>
               ${completedTasks.map((task) => renderTaskCard(task)).join("")}
+              ${completedSequenceSteps.map((entry) => renderSequenceCard(entry)).join("")}
             `
             : ""
         }
@@ -1641,6 +1718,12 @@ async function renderTasksPage() {
   viewContainer.querySelectorAll("[data-task-id]").forEach((taskEl) => {
     taskEl.addEventListener("click", () => {
       window.location.hash = appendOriginToHash(`#task/${taskEl.dataset.taskId}`, window.location.hash);
+    });
+  });
+
+  viewContainer.querySelectorAll("[data-sequence-event-id]").forEach((sequenceEl) => {
+    sequenceEl.addEventListener("click", () => {
+      window.location.hash = appendOriginToHash(`#sequence-event/${sequenceEl.dataset.sequenceEventId}`, window.location.hash);
     });
   });
 }
@@ -2587,7 +2670,7 @@ async function renderPromotionEventDetail(eventId) {
     const activeLeadMarkup = leadCards.filter((entry) => !entry.isCompleted).map((entry) => entry.markup).join("");
     const completedLeadMarkup = leadCards.filter((entry) => entry.isCompleted).map((entry) => entry.markup).join("");
 
-    const mailPreview = renderTemplateWithLead(templateConfig, "").trim();
+    const mailPreview = renderTemplateWithLead(templateConfig, contact?.name || "").trim();
 
     viewContainer.innerHTML = `
       <section class="crm-view crm-view--promotions">
@@ -2597,7 +2680,7 @@ async function renderPromotionEventDetail(eventId) {
             <button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button>
           </div>
         </div>
-        <div class="panel panel--lead detail-grid feed-item--promotion">
+        <div class="panel panel--sequence detail-grid feed-item--sequence">
           <p><strong>Promotion:</strong> ${escapeHtml(promotion.name || "Untitled promo")}</p>
           <p><strong>Touchpoint:</strong> ${escapeHtml(touchpoint.name || "Touchpoint")}</p>
           <p><strong>Due:</strong> ${formatDate(event.scheduledFor)}</p>
@@ -2694,7 +2777,7 @@ async function renderPromotionEventDetail(eventId) {
           <button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button>
         </div>
       </div>
-      <div class="panel panel--lead detail-grid feed-item--promotion">
+      <div class="panel panel--sequence detail-grid feed-item--sequence">
         <p><strong>Lead:</strong> ${escapeHtml(contact?.name || "Unnamed Contact")}</p>
         <p><strong>Promotion:</strong> ${escapeHtml(event.touchpointName || event.name || "Promotion touchpoint")}</p>
         <p><strong>Due:</strong> ${formatDate(event.scheduledFor)}</p>
@@ -3768,30 +3851,72 @@ function buildSequenceStepState(step = {}, index = 0) {
     order: index,
     name: String(step.name || `Step ${index + 1}`),
     delayDaysFromPrevious: index === 0 ? 0 : Math.max(0, Number(step.delayDaysFromPrevious) || 0),
+    triggerImmediatelyAfterPrevious: index > 0 && step.triggerImmediatelyAfterPrevious === true,
+    useContactEmail: step.useContactEmail === true,
     toEmail: String(step.toEmail || ""),
-    templateConfig: template,
+    templateConfig: {
+      ...template,
+      populateName: template.populateName === true && step.useContactEmail === true,
+    },
   };
 }
 
 function syncSequenceStepsFromForm(steps = []) {
-  return steps.map((step, index) => ({
-    ...step,
-    name: String(document.querySelector(`[data-sequence-step-name="${index}"]`)?.value || step.name || `Step ${index + 1}`),
-    delayDaysFromPrevious: index === 0 ? 0 : (Number.parseInt(document.querySelector(`[data-sequence-step-delay="${index}"]`)?.value || step.delayDaysFromPrevious || 0, 10) || 0),
-    toEmail: String(document.querySelector(`[data-sequence-step-to="${index}"]`)?.value || step.toEmail || ""),
-    templateConfig: {
-      subjectText: document.querySelector(`[data-sequence-step-subject="${index}"]`)?.value || "",
-      introText: document.querySelector(`[data-sequence-step-intro="${index}"]`)?.value || "",
-      populateName: document.querySelector(`[data-sequence-step-populate-name="${index}"]`)?.checked === true,
-      bodyText: document.querySelector(`[data-sequence-step-body="${index}"]`)?.value || "",
-      outroText: document.querySelector(`[data-sequence-step-outro="${index}"]`)?.value || "",
-    },
-  }));
+  return steps.map((step, index) => {
+    const useContactEmail = document.querySelector(`[data-sequence-step-use-contact-email="${index}"]`)?.checked === true;
+    const toFieldValue = document.querySelector(`[data-sequence-step-to="${index}"]`)?.value;
+    return {
+      ...step,
+      name: String(document.querySelector(`[data-sequence-step-name="${index}"]`)?.value || step.name || `Step ${index + 1}`),
+      delayDaysFromPrevious:
+        index === 0 ? 0 : (Number.parseInt(document.querySelector(`[data-sequence-step-delay="${index}"]`)?.value || step.delayDaysFromPrevious || 0, 10) || 0),
+      triggerImmediatelyAfterPrevious: index > 0 && document.querySelector(`[data-sequence-step-trigger-immediate="${index}"]`)?.checked === true,
+      useContactEmail,
+      toEmail: String(toFieldValue !== undefined ? toFieldValue : (step.toEmail || "")),
+      templateConfig: {
+        subjectText: document.querySelector(`[data-sequence-step-subject="${index}"]`)?.value || "",
+        introText: document.querySelector(`[data-sequence-step-intro="${index}"]`)?.value || "",
+        populateName: document.querySelector(`[data-sequence-step-populate-name="${index}"]`)?.checked === true,
+        bodyText: document.querySelector(`[data-sequence-step-body="${index}"]`)?.value || "",
+        outroText: document.querySelector(`[data-sequence-step-outro="${index}"]`)?.value || "",
+      },
+    };
+  });
 }
 
 function buildSequenceStepMarkup(step, index) {
   const template = normalizePromotionTemplateConfig(step.templateConfig || {});
-  return `<article class="panel detail-grid promotion-wizard-message-card"><p class="promotion-wizard-card-title"><strong>${escapeHtml(step.name || `Step ${index + 1}`)}</strong></p><label>Step Name<input data-sequence-step-name="${index}" value="${escapeHtml(step.name || `Step ${index + 1}`)}" /></label>${index > 0 ? `<label>Send this message <input class="promotion-wizard-offset-input" type="number" min="0" data-sequence-step-delay="${index}" value="${Number(step.delayDaysFromPrevious) || 0}" /> days after the previous step.</label>` : '<p>Step 1 sends at Start Date (or immediately if unset).</p>'}<label>To<input type="email" data-sequence-step-to="${index}" value="${escapeHtml(step.toEmail || "")}" placeholder="person@example.com" /></label><label>Subject<input data-sequence-step-subject="${index}" value="${escapeHtml(template.subjectText)}" /></label><label>Intro<input data-sequence-step-intro="${index}" value="${escapeHtml(template.introText)}" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-populate-name="${index}" ${template.populateName ? "checked" : ""} /><span>Populate name</span></label><label>Body<textarea rows="4" data-sequence-step-body="${index}">${escapeHtml(template.bodyText)}</textarea></label><label>Outro<input data-sequence-step-outro="${index}" value="${escapeHtml(template.outroText)}" /></label></article>`;
+  return `<article class="panel detail-grid promotion-wizard-message-card"><p class="promotion-wizard-card-title"><strong>${escapeHtml(step.name || `Step ${index + 1}`)}</strong></p><label>Step Name<input data-sequence-step-name="${index}" value="${escapeHtml(step.name || `Step ${index + 1}`)}" /></label>${index > 0 ? `<label class="sequence-offset-row"><span>Send this message</span><input class="promotion-wizard-offset-input" type="number" min="0" data-sequence-step-delay="${index}" value="${Number(step.delayDaysFromPrevious) || 0}" /><span>days after the previous step.</span></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-trigger-immediate="${index}" ${step.triggerImmediatelyAfterPrevious ? "checked" : ""} /><span>Trigger immediately upon completion of the previous step</span></label>` : '<p>Step 1 sends at Start Date (or immediately if unset).</p>'}<label>To<input type="email" data-sequence-step-to="${index}" value="${escapeHtml(step.toEmail || "")}" placeholder="person@example.com" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-use-contact-email="${index}" ${step.useContactEmail ? "checked" : ""} /><span>Use contact email for this step</span></label><label>Subject<input data-sequence-step-subject="${index}" value="${escapeHtml(template.subjectText)}" /></label><label>Intro<input data-sequence-step-intro="${index}" value="${escapeHtml(template.introText)}" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-populate-name="${index}" ${template.populateName ? "checked" : ""} /><span>Auto populate name</span></label><label>Body<textarea rows="4" data-sequence-step-body="${index}">${escapeHtml(template.bodyText)}</textarea></label><label>Outro<input data-sequence-step-outro="${index}" value="${escapeHtml(template.outroText)}" /></label></article>`;
+}
+
+function applySequenceStepContactRules(step, index, selectedContact = null) {
+  const toInput = document.querySelector(`[data-sequence-step-to="${index}"]`);
+  const useContactCheckbox = document.querySelector(`[data-sequence-step-use-contact-email="${index}"]`);
+  const populateNameCheckbox = document.querySelector(`[data-sequence-step-populate-name="${index}"]`);
+  const hasContact = Boolean(selectedContact?.email);
+
+  if (!toInput || !useContactCheckbox || !populateNameCheckbox) return;
+
+  useContactCheckbox.disabled = !hasContact;
+  if (!hasContact) useContactCheckbox.checked = false;
+
+  const useContactEmail = hasContact && useContactCheckbox.checked === true;
+  if (useContactEmail) {
+    toInput.value = selectedContact.email || "";
+    toInput.readOnly = true;
+    toInput.classList.add("sequence-readonly-input");
+  } else {
+    if (toInput.classList.contains("sequence-contact-email-value")) {
+      toInput.value = "";
+    }
+    toInput.readOnly = false;
+    toInput.classList.remove("sequence-readonly-input");
+  }
+
+  toInput.classList.toggle("sequence-contact-email-value", useContactEmail);
+
+  populateNameCheckbox.disabled = !useContactEmail;
+  if (!useContactEmail) populateNameCheckbox.checked = false;
 }
 
 async function renderSequenceCreateFlow() {
@@ -3848,7 +3973,24 @@ async function renderSequenceCreateFlow() {
     }
 
     if (state.page === "steps") {
+      const selectedContact = contacts.find((entry) => entry.id === state.contactId) || null;
       viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(state.sequenceName || "New Sequence")}</h2></div><div class="promotion-wizard-message-list">${state.steps.map((step, index) => buildSequenceStepMarkup(step, index)).join("")}</div><div class="button-row"><button id="sequence-add-step-btn" type="button" class="secondary-btn">Add Sequence Step</button><button id="sequence-steps-prev-btn" type="button" class="secondary-btn">Back</button><button id="sequence-create-btn" type="button">Create</button></div></section>`;
+
+      state.steps.forEach((step, index) => {
+        applySequenceStepContactRules(step, index, selectedContact);
+        document.querySelector(`[data-sequence-step-use-contact-email="${index}"]`)?.addEventListener("change", () => {
+          applySequenceStepContactRules(step, index, selectedContact);
+        });
+        document.querySelector(`[data-sequence-step-trigger-immediate="${index}"]`)?.addEventListener("change", (event) => {
+          const delayInput = document.querySelector(`[data-sequence-step-delay="${index}"]`);
+          if (!delayInput) return;
+          delayInput.disabled = event.target.checked === true;
+        });
+        const immediateChecked = document.querySelector(`[data-sequence-step-trigger-immediate="${index}"]`)?.checked === true;
+        const delayInput = document.querySelector(`[data-sequence-step-delay="${index}"]`);
+        if (delayInput && immediateChecked) delayInput.disabled = true;
+      });
+
       document.getElementById("sequence-add-step-btn")?.addEventListener("click", () => {
         state.steps = syncSequenceStepsFromForm(state.steps);
         state.steps.push(buildSequenceStepState({ name: `Step ${state.steps.length + 1}`, delayDaysFromPrevious: 1 }, state.steps.length));
@@ -3902,23 +4044,25 @@ async function renderSequenceEventDetail(eventId) {
     return;
   }
   const sequence = { id: sequenceSnapshot.id, ...sequenceSnapshot.data() };
+  const contactSnapshot = sequence.contactId ? await getDoc(doc(db, "users", currentUser.uid, "contacts", sequence.contactId)) : null;
+  const contact = contactSnapshot?.exists() ? { id: contactSnapshot.id, ...contactSnapshot.data() } : null;
   const events = eventsSnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })).sort((a, b) => (Number(a.stepOrder) || 0) - (Number(b.stepOrder) || 0));
 
   const current = events.find((entry) => entry.id === eventId) || event;
   const next = events.find((entry) => (Number(entry.stepOrder) || 0) > (Number(current.stepOrder) || 0) && !entry.completed && entry.status !== "skipped");
   const completed = events.filter((entry) => entry.completed || entry.status === "skipped");
   const templateConfig = normalizePromotionTemplateConfig(current.templateConfig || current.template || {});
-  const mailPreview = renderTemplateWithLead(templateConfig, "").trim();
+  const mailPreview = renderTemplateWithLead(templateConfig, contact?.name || "").trim();
 
   const renderStepCard = (entry, withActions = false) => {
     const cfg = normalizePromotionTemplateConfig(entry.templateConfig || entry.template || {});
-    const body = renderTemplateWithLead(cfg, "").trim();
-    const to = String(entry.toEmail || "").trim();
+    const body = renderTemplateWithLead(cfg, contact?.name || "").trim();
+    const to = String(entry.useContactEmail ? (contact?.email || "") : (entry.toEmail || "")).trim();
     const stateLabel = entry.status === "skipped" ? "Skipped" : entry.completed ? "Done" : "Open";
-    return `<article class="promo-touchpoint-lead-card panel panel--lead ${entry.completed || entry.status === "skipped" ? "promo-touchpoint-lead-card--completed" : ""}"><div class="promo-touchpoint-lead-meta"><p class="promo-touchpoint-lead-name">${escapeHtml(entry.stepName || "Step")}</p><p class="promo-touchpoint-lead-detail">Scheduled for ${escapeHtml(formatDate(entry.scheduledFor))}</p><p class="promo-touchpoint-lead-status">Status: ${escapeHtml(stateLabel)}</p></div>${withActions ? `<div class="promo-touchpoint-lead-actions"><div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-open-mail="${entry.id}" ${to ? `data-mail-to="${escapeHtml(to)}"` : "disabled"} data-mail-subject="${escapeHtml(cfg.subjectText || "")}" data-mail-body="${escapeHtml(body)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(body)}">Copy</button></div><div class="promo-touchpoint-action-divider" aria-hidden="true"></div><div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-step-done="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-sequence-step-skip="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Skip</button></div></div>` : ""}</article>`;
+    return `<article class="promo-touchpoint-lead-card panel panel--sequence ${entry.completed || entry.status === "skipped" ? "promo-touchpoint-lead-card--completed" : ""}"><div class="promo-touchpoint-lead-meta"><p class="promo-touchpoint-lead-name">${escapeHtml(entry.stepName || "Step")}</p><p class="promo-touchpoint-lead-detail">Scheduled for ${escapeHtml(formatDate(entry.scheduledFor))}</p><p class="promo-touchpoint-lead-status">Status: ${escapeHtml(stateLabel)}</p></div>${withActions ? `<div class="promo-touchpoint-lead-actions"><div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-open-mail="${entry.id}" ${to ? `data-mail-to="${escapeHtml(to)}"` : "disabled"} data-mail-subject="${escapeHtml(cfg.subjectText || "")}" data-mail-body="${escapeHtml(body)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(body)}">Copy</button></div><div class="promo-touchpoint-action-divider" aria-hidden="true"></div><div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-step-done="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-sequence-step-skip="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Skip</button></div></div>` : ""}</article>`;
   };
 
-  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequence.name || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button></div></div><div class="panel panel--lead detail-grid feed-item--promotion"><p><strong>Sequence:</strong> ${escapeHtml(sequence.name || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div><div class="panel panel--lead notes-panel"><label class="full-width">Template Preview<textarea rows="5" readonly>${escapeHtml(mailPreview)}</textarea></label><div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
+  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequence.name || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button></div></div><div class="panel panel--sequence detail-grid feed-item--sequence"><p><strong>Sequence:</strong> ${escapeHtml(sequence.name || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div><div class="panel panel--lead notes-panel"><label class="full-width">Template Preview<textarea rows="5" readonly>${escapeHtml(mailPreview)}</textarea></label><div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
 
   document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
     window.location.hash = originRoute || "#dashboard";
