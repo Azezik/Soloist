@@ -69,6 +69,8 @@ const demoSectionEl = document.getElementById("demo-section");
 const strippedSectionEl = document.getElementById("stripped-section");
 
 const DEMO_LOOP_MS = 6000;
+const SPREADSHEET_HEADERS = ["Date Added", "Contact Name", "Email", "Phone Number", "Product", "Status", "Stage"];
+const IMPORT_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const DEMO_STEPS = [
   { delay: 500, target: demoNameEl, value: "Carl Simon" },
   { delay: 1100, target: demoEmailEl, value: "carl@email.com" },
@@ -364,6 +366,173 @@ function formatDate(value) {
   const date = toDate(value);
   if (!date) return "-";
   return date.toLocaleString();
+}
+
+function formatDateForSpreadsheet(value) {
+  const date = toDate(value);
+  if (!date) return "";
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function parseImportDate(value) {
+  const trimmedValue = String(value || "").trim();
+  const matches = IMPORT_DATE_PATTERN.exec(trimmedValue);
+  if (!matches) return null;
+  const year = Number.parseInt(matches[1], 10);
+  const month = Number.parseInt(matches[2], 10);
+  const day = Number.parseInt(matches[3], 10);
+  const parsed = new Date(year, month - 1, day);
+  if (Number.isNaN(parsed.getTime())) return null;
+  if (parsed.getFullYear() !== year || parsed.getMonth() !== month - 1 || parsed.getDate() !== day) return null;
+  return parsed;
+}
+
+function escapeCsvCell(value) {
+  const stringValue = String(value ?? "");
+  if (!/[",\n]/.test(stringValue)) return stringValue;
+  return `"${stringValue.replace(/"/g, '""')}"`;
+}
+
+function buildCsv(rows) {
+  return rows.map((row) => row.map((cell) => escapeCsvCell(cell)).join(",")).join("\n");
+}
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const nextChar = text[i + 1];
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        cell += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && nextChar === "\n") i += 1;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+
+    cell += char;
+  }
+
+  if (inQuotes) {
+    throw new Error("Invalid CSV format: unclosed quoted field.");
+  }
+
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell);
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function validateSpreadsheetHeaders(headerRow) {
+  if (!Array.isArray(headerRow) || headerRow.length !== SPREADSHEET_HEADERS.length) {
+    throw new Error(`Invalid headers. Expected: ${SPREADSHEET_HEADERS.join(", ")}`);
+  }
+
+  const hasMismatch = SPREADSHEET_HEADERS.some((header, index) => headerRow[index] !== header);
+  if (hasMismatch) {
+    throw new Error(`Invalid headers. Expected: ${SPREADSHEET_HEADERS.join(", ")}`);
+  }
+}
+
+function mapStageIndexToStageId(pipelineSettings, stageValue, fallbackStageId) {
+  const trimmedStage = String(stageValue || "").trim();
+  if (!trimmedStage) return fallbackStageId;
+  const matched = /^stage\s+(\d+)$/i.exec(trimmedStage);
+  if (!matched) return null;
+  const stageIndex = Number.parseInt(matched[1], 10) - 1;
+  if (Number.isNaN(stageIndex) || stageIndex < 0 || stageIndex >= pipelineSettings.stages.length) return null;
+  return pipelineSettings.stages[stageIndex]?.id || null;
+}
+
+function mapStageIdToStageConcept(pipelineSettings, stageId) {
+  const index = pipelineSettings.stages.findIndex((stage) => stage.id === stageId);
+  if (index < 0) return "";
+  return `Stage ${index + 1}`;
+}
+
+async function createLeadViaManualFlow({ pipelineSettings, values, createdAtDate = new Date() }) {
+  const now = Timestamp.fromDate(createdAtDate);
+  const computedNextActionAt = computeInitialLeadNextActionAt(pipelineSettings, values.stageId, createdAtDate);
+  let contactId = values.selectedContactId || null;
+
+  if (!contactId && values.contactName) {
+    const createdContact = await addDoc(collection(db, "users", currentUser.uid, "contacts"), {
+      name: values.contactName,
+      email: values.contactEmail,
+      phone: values.contactPhone,
+      createdAt: now,
+      updatedAt: serverTimestamp(),
+    });
+    contactId = createdContact.id;
+  }
+
+  const leadPayload = {
+    ...buildTimelineEventFields("lead", {
+      contactId,
+      status: values.stageStatus || "pending",
+      archived: values.stageStatus === "completed",
+    }),
+    title: values.contactName || "Lead",
+    summary: values.initialNote || "",
+    stageId: values.stageId,
+    product: values.product || "",
+    stageStatus: values.stageStatus || "pending",
+    state: "open",
+    nextActionAt: computedNextActionAt,
+    createdAt: now,
+    updatedAt: serverTimestamp(),
+  };
+
+  const leadDoc = await addDoc(collection(db, "users", currentUser.uid, "leads"), leadPayload);
+  await setDoc(doc(db, "users", currentUser.uid, "events", `lead_${leadDoc.id}`), {
+    type: "lead",
+    sourceId: leadDoc.id,
+    contactId,
+    scheduledFor: computedNextActionAt,
+    nextActionAt: computedNextActionAt,
+    title: leadPayload.title || "Lead",
+    status: leadPayload.status || "open",
+    completed: false,
+    archived: false,
+    deleted: false,
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+
+  if (values.initialNote) {
+    await addTimelineNote({
+      contactId,
+      parentType: "lead",
+      parentId: leadDoc.id,
+      noteText: values.initialNote,
+    });
+  }
 }
 
 async function copyTextToClipboard(value) {
@@ -1238,60 +1407,7 @@ async function renderAddLeadForm() {
     contacts,
     values: { stageId: firstStageId, stageStatus: "pending" },
     onSubmit: async (values) => {
-      const now = Timestamp.now();
-      const computedNextActionAt = computeInitialLeadNextActionAt(pipelineSettings, values.stageId, new Date());
-      let contactId = values.selectedContactId || null;
-
-      if (!contactId && values.contactName) {
-        const createdContact = await addDoc(collection(db, "users", currentUser.uid, "contacts"), {
-          name: values.contactName,
-          email: values.contactEmail,
-          phone: values.contactPhone,
-          createdAt: now,
-          updatedAt: serverTimestamp(),
-        });
-        contactId = createdContact.id;
-      }
-
-      const leadPayload = {
-        ...buildTimelineEventFields("lead", {
-          contactId,
-          status: values.stageStatus || "pending",
-          archived: values.stageStatus === "completed",
-        }),
-        title: values.contactName || "Lead",
-        summary: values.initialNote || "",
-        stageId: values.stageId,
-        product: values.product || "",
-        stageStatus: values.stageStatus || "pending",
-        state: "open",
-        nextActionAt: computedNextActionAt,
-        createdAt: now,
-        updatedAt: serverTimestamp(),
-      };
-
-      const leadDoc = await addDoc(collection(db, "users", currentUser.uid, "leads"), leadPayload);
-      await setDoc(doc(db, "users", currentUser.uid, "events", `lead_${leadDoc.id}`), {
-        type: "lead",
-        sourceId: leadDoc.id,
-        contactId,
-        scheduledFor: computedNextActionAt,
-        nextActionAt: computedNextActionAt,
-        title: leadPayload.title || "Lead",
-        status: leadPayload.status || "open",
-        completed: false,
-        archived: false,
-        deleted: false,
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
-      if (values.initialNote) {
-        await addTimelineNote({
-          contactId,
-          parentType: "lead",
-          parentId: leadDoc.id,
-          noteText: values.initialNote,
-        });
-      }
+      await createLeadViaManualFlow({ pipelineSettings, values, createdAtDate: new Date() });
       window.location.hash = "#dashboard";
     },
   });
@@ -3261,6 +3377,105 @@ function renderPromotionCreateFlow({ snapWindowDays, pipelineStages = [], pipeli
   draw();
 }
 
+
+async function exportSpreadsheetData() {
+  const [pipelineSettings, contactsSnapshot, leadsSnapshot] = await Promise.all([
+    getPipelineSettings(currentUser.uid),
+    getDocs(collection(db, "users", currentUser.uid, "contacts")),
+    getDocs(collection(db, "users", currentUser.uid, "leads")),
+  ]);
+
+  const contactById = contactsSnapshot.docs.reduce((acc, contactDoc) => {
+    const contact = { id: contactDoc.id, ...contactDoc.data() };
+    if (isActiveRecord(contact)) acc[contact.id] = contact;
+    return acc;
+  }, {});
+
+  const leadRows = leadsSnapshot.docs
+    .map((leadDoc) => ({ id: leadDoc.id, ...leadDoc.data() }))
+    .filter((lead) => isActiveRecord(lead))
+    .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
+
+  const rows = [
+    SPREADSHEET_HEADERS,
+    ...leadRows.map((lead) => {
+      const linkedContact = lead.contactId ? contactById[lead.contactId] : null;
+      return [
+        formatDateForSpreadsheet(lead.createdAt),
+        linkedContact?.name || lead.title || "",
+        linkedContact?.email || "",
+        linkedContact?.phone || "",
+        lead.product || "",
+        lead.stageStatus || "pending",
+        mapStageIdToStageConcept(pipelineSettings, lead.stageId),
+      ];
+    }),
+  ];
+
+  const csvText = buildCsv(rows);
+  const csvBlob = new Blob([csvText], { type: "text/csv;charset=utf-8" });
+  const downloadUrl = URL.createObjectURL(csvBlob);
+  const linkEl = document.createElement("a");
+  linkEl.href = downloadUrl;
+  linkEl.download = "smolcrm-spreadsheet.csv";
+  document.body.appendChild(linkEl);
+  linkEl.click();
+  document.body.removeChild(linkEl);
+  URL.revokeObjectURL(downloadUrl);
+}
+
+async function importSpreadsheetFile(file, pipelineSettings) {
+  const fileText = await file.text();
+  const rows = parseCsv(fileText);
+  if (!rows.length) throw new Error("Spreadsheet is empty.");
+
+  validateSpreadsheetHeaders(rows[0]);
+
+  const firstStageId = pipelineSettings.stages[0]?.id || "stage1";
+  let importedCount = 0;
+  let skippedCount = 0;
+
+  for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex] || [];
+    const normalizedRow = SPREADSHEET_HEADERS.reduce((acc, header, index) => {
+      acc[header] = String(row[index] || "").trim();
+      return acc;
+    }, {});
+
+    const hasAnyContent = Object.values(normalizedRow).some((value) => value);
+    if (!hasAnyContent) continue;
+
+    const parsedDate = parseImportDate(normalizedRow["Date Added"]);
+    const stageId = mapStageIndexToStageId(pipelineSettings, normalizedRow.Stage, firstStageId);
+    const statusValue = String(normalizedRow.Status || "pending").toLowerCase();
+    const isValidStatus = statusValue === "pending" || statusValue === "completed";
+
+    if (!parsedDate || !normalizedRow["Contact Name"] || !stageId || !isValidStatus) {
+      skippedCount += 1;
+      continue;
+    }
+
+    await createLeadViaManualFlow({
+      pipelineSettings,
+      createdAtDate: parsedDate,
+      values: {
+        selectedContactId: null,
+        contactName: normalizedRow["Contact Name"],
+        contactEmail: normalizedRow.Email,
+        contactPhone: normalizedRow["Phone Number"],
+        stageId,
+        product: normalizedRow.Product,
+        stageStatus: statusValue,
+        initialNote: "",
+      },
+    });
+
+    importedCount += 1;
+  }
+
+  return { importedCount, skippedCount };
+}
+
 async function renderSettingsPage() {
   renderLoading("Loading settings...");
 
@@ -3373,11 +3588,51 @@ async function renderSettingsPage() {
             .join("")}
 
           <button type="submit" class="full-width">Save Settings</button>
+
+          <h3>Spreadsheet Import / Export</h3>
+          <p class="view-message">Use this format exactly: ${SPREADSHEET_HEADERS.join(", ")}.</p>
+          <div class="button-row full-width">
+            <button type="button" id="export-spreadsheet-btn" class="secondary-btn">Export Spreadsheet</button>
+          </div>
+          <label>Import Spreadsheet (.csv)
+            <input type="file" id="import-spreadsheet-input" accept=".csv,text/csv" />
+          </label>
+          <div class="button-row full-width">
+            <button type="button" id="import-spreadsheet-btn" class="secondary-btn">Import Spreadsheet</button>
+          </div>
         </form>
       </section>
     `;
 
     const formEl = document.getElementById("pipeline-settings-form");
+    const importInputEl = document.getElementById("import-spreadsheet-input");
+
+    document.getElementById("export-spreadsheet-btn")?.addEventListener("click", async () => {
+      try {
+        await exportSpreadsheetData();
+      } catch (error) {
+        console.error("Spreadsheet export failed", error);
+        alert("Spreadsheet export failed.");
+      }
+    });
+
+    document.getElementById("import-spreadsheet-btn")?.addEventListener("click", async () => {
+      const selectedFile = importInputEl?.files?.[0] || null;
+      if (!selectedFile) {
+        alert("Select a spreadsheet file first.");
+        return;
+      }
+
+      try {
+        const pipelineSettings = editableSettings.pipeline;
+        const importResult = await importSpreadsheetFile(selectedFile, pipelineSettings);
+        alert(`Import complete. Imported: ${importResult.importedCount}. Skipped: ${importResult.skippedCount}.`);
+        importInputEl.value = "";
+      } catch (error) {
+        console.error("Spreadsheet import failed", error);
+        alert(error.message || "Spreadsheet import failed.");
+      }
+    });
 
     formEl?.addEventListener("click", (event) => {
       const addTemplateButton = event.target.closest("[data-add-template-stage-index]");
