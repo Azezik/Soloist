@@ -1,7 +1,7 @@
 import { Timestamp, collection, db, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc } from "./firestore-service.js";
 
 function isPromotionEvent(event = {}) {
-  return event?.type === "promotion" || event?.type === "promotion_touchpoint" || Boolean(event?.promotionId);
+  return event?.type === "promotion" || event?.type === "promotion_touchpoint" || Boolean(event?.promotionId) || event?.type === "sequence" || event?.type === "sequence_step" || Boolean(event?.sequenceId);
 }
 
 
@@ -105,7 +105,7 @@ export async function updateCalendarItemSchedule(currentUserId, calendarItem, ne
     return;
   }
 
-  if (calendarItem.type === "promotion" || calendarItem.type === "promotion_touchpoint") {
+  if (calendarItem.type === "promotion" || calendarItem.type === "promotion_touchpoint" || calendarItem.type === "sequence" || calendarItem.type === "sequence_step") {
     return;
   }
 

@@ -80,7 +80,7 @@ export function normalizeCalendarItems(tasks, leads, promotionEvents = []) {
     .map((event) => {
       const date = toDate(event.scheduledFor || event.nextActionAt);
       if (!date) return null;
-      const itemType = event.type === "promotion_touchpoint" ? "promotion_touchpoint" : "promotion";
+      const itemType = event.type === "promotion_touchpoint" ? "promotion_touchpoint" : event.type === "sequence_step" ? "sequence_step" : event.type === "sequence" ? "sequence" : "promotion";
       return {
         id: event.id,
         type: itemType,
@@ -89,7 +89,7 @@ export function normalizeCalendarItems(tasks, leads, promotionEvents = []) {
         date,
         dayKey: toDayKey(date),
         hasTime: hasSpecificTime(date),
-        path: `#promotion-event/${event.id}`,
+        path: itemType === "sequence" || itemType === "sequence_step" ? `#sequence-event/${event.id}` : `#promotion-event/${event.id}`,
       };
     })
     .filter(Boolean);
