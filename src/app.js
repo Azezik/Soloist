@@ -3931,6 +3931,7 @@ async function renderSequenceCreateFlow() {
   const state = {
     page: "select",
     selectedTemplate: null,
+    sourceTemplate: null,
     sequenceName: "",
     startDate: "",
     contactId: "",
@@ -3940,28 +3941,68 @@ async function renderSequenceCreateFlow() {
   const render = () => {
     if (state.page === "select") {
       const options = existing.length
-        ? `<div class="feed-list">${existing.map((entry) => `<button type="button" class="panel feed-item" data-select-sequence-template="${entry.id}"><h3>${escapeHtml(entry.name || "Untitled Sequence")}</h3><p>${Array.isArray(entry.steps) ? entry.steps.length : 0} steps</p></button>`).join("")}</div>`
-        : '<button type="button" id="configure-sequence-btn">Configure New Sequence</button>';
+        ? `<div class="feed-list">${existing.map((entry) => `<button type="button" class="panel feed-item" data-select-sequence-template="${entry.id}"><h3>${escapeHtml(entry.name || "Untitled Sequence")}</h3><p>${Array.isArray(entry.steps) ? entry.steps.length : 0} steps</p></button>`).join("")}</div><div class="button-row"><button type="button" id="configure-sequence-btn">Configure New Sequence</button></div>`
+        : '<div class="button-row"><button type="button" id="configure-sequence-btn">Configure New Sequence</button></div>';
       viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Sequence</h2><div class="view-header-actions"><button id="sequence-cancel-btn" type="button" class="secondary-btn">Back</button></div></div><div class="panel"><h3>Select Sequence</h3>${options}</div></section>`;
       document.getElementById("sequence-cancel-btn")?.addEventListener("click", () => { window.location.hash = "#tasks"; });
-      document.getElementById("configure-sequence-btn")?.addEventListener("click", () => { state.page = "configure"; render(); });
+      document.getElementById("configure-sequence-btn")?.addEventListener("click", () => {
+        state.selectedTemplate = null;
+        state.sourceTemplate = null;
+        state.sequenceName = "";
+        state.contactId = "";
+        state.startDate = "";
+        state.steps = [buildSequenceStepState({}, 0)];
+        state.page = "configure";
+        render();
+      });
       document.querySelectorAll("[data-select-sequence-template]").forEach((buttonEl) => {
         buttonEl.addEventListener("click", () => {
           const selected = existing.find((entry) => entry.id === buttonEl.dataset.selectSequenceTemplate);
           state.selectedTemplate = selected || null;
+          state.sourceTemplate = selected || null;
           state.sequenceName = selected?.name || "";
           state.steps = (selected?.steps || []).map((step, index) => buildSequenceStepState(step, index));
           if (!state.steps.length) state.steps = [buildSequenceStepState({}, 0)];
-          state.page = "configure";
+          state.page = "schedule";
           render();
         });
       });
       return;
     }
 
+    if (state.page === "schedule") {
+      const sequenceLabel = state.selectedTemplate?.name || "Untitled Sequence";
+      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>Use Sequence</h2></div><div class="panel detail-grid"><p><strong>${escapeHtml(sequenceLabel)}</strong></p><label>Add Contact (optional)<select id="sequence-contact-id"><option value="">No contact</option>${contacts.map((c) => `<option value="${c.id}" ${state.contactId === c.id ? "selected" : ""}>${escapeHtml(c.name || c.email || "Unnamed")}</option>`).join("")}</select></label><label>Start Date (optional)<input id="sequence-start-date" type="datetime-local" value="${escapeHtml(state.startDate)}" /></label></div><div class="button-row"><button id="sequence-schedule-back-btn" type="button" class="secondary-btn">Back</button><button id="sequence-edit-btn" type="button" class="secondary-btn">Edit</button><button id="sequence-save-btn" type="button">Save</button></div></section>`;
+      document.getElementById("sequence-schedule-back-btn")?.addEventListener("click", () => {
+        state.page = "select";
+        render();
+      });
+      document.getElementById("sequence-edit-btn")?.addEventListener("click", () => {
+        state.contactId = document.getElementById("sequence-contact-id")?.value || "";
+        state.startDate = document.getElementById("sequence-start-date")?.value || "";
+        state.page = "configure";
+        render();
+      });
+      document.getElementById("sequence-save-btn")?.addEventListener("click", async () => {
+        state.contactId = document.getElementById("sequence-contact-id")?.value || "";
+        state.startDate = document.getElementById("sequence-start-date")?.value || "";
+        const payload = {
+          name: state.selectedTemplate?.name || state.sequenceName || "Untitled Sequence",
+          startDate: state.startDate ? new Date(state.startDate) : null,
+          steps: (state.selectedTemplate?.steps || state.steps || []).map((entry, index) => ({ ...entry, order: index, name: entry.name || `Step ${index + 1}` })),
+        };
+        await createSequence({ db, userId: currentUser.uid, sequence: payload, contactId: state.contactId || null });
+        window.location.hash = "#tasks";
+      });
+      return;
+    }
+
     if (state.page === "configure") {
       viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Sequence</h2></div><div class="panel detail-grid"><p><strong>${escapeHtml(state.selectedTemplate?.name || state.sequenceName || "Configure New Sequence")}</strong></p><label>Sequence Name<input id="sequence-name-input" value="${escapeHtml(state.sequenceName || state.selectedTemplate?.name || "")}" /></label><label>Add Contact (optional)<select id="sequence-contact-id"><option value="">No contact</option>${contacts.map((c) => `<option value="${c.id}" ${state.contactId === c.id ? "selected" : ""}>${escapeHtml(c.name || c.email || "Unnamed")}</option>`).join("")}</select></label><label>Start Date (optional)<input id="sequence-start-date" type="datetime-local" value="${escapeHtml(state.startDate)}" /></label></div><div class="button-row"><button id="sequence-prev-btn" type="button" class="secondary-btn">Back</button><button id="sequence-next-btn" type="button">Next</button></div></section>`;
-      document.getElementById("sequence-prev-btn")?.addEventListener("click", () => { state.page = "select"; render(); });
+      document.getElementById("sequence-prev-btn")?.addEventListener("click", () => {
+        state.page = state.sourceTemplate ? "schedule" : "select";
+        render();
+      });
       document.getElementById("sequence-next-btn")?.addEventListener("click", () => {
         state.sequenceName = document.getElementById("sequence-name-input")?.value || state.sequenceName || "";
         state.contactId = document.getElementById("sequence-contact-id")?.value || "";
