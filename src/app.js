@@ -59,6 +59,134 @@ const logoutBtn = document.getElementById("logout-btn");
 const authPage = document.getElementById("auth-page");
 const appPage = document.getElementById("app-page");
 const viewContainer = document.getElementById("view-container");
+const demoNameEl = document.getElementById("demo-name");
+const demoEmailEl = document.getElementById("demo-email");
+const demoPhoneEl = document.getElementById("demo-phone");
+const demoNotesEl = document.getElementById("demo-notes");
+const demoSaveEl = document.getElementById("demo-save");
+const demoResultEl = document.getElementById("demo-result");
+const demoSectionEl = document.getElementById("demo-section");
+const strippedSectionEl = document.getElementById("stripped-section");
+
+const DEMO_LOOP_MS = 6000;
+const DEMO_STEPS = [
+  { delay: 500, target: demoNameEl, value: "Carl Simon" },
+  { delay: 1100, target: demoEmailEl, value: "carl@email.com" },
+  { delay: 1700, target: demoPhoneEl, value: "555-1234" },
+  { delay: 2300, target: demoNotesEl, value: "Interested in Jacuzzi." },
+];
+
+let demoLoopIntervalId = null;
+
+function clearDemoFields() {
+  [demoNameEl, demoEmailEl, demoPhoneEl, demoNotesEl].forEach((fieldEl) => {
+    if (fieldEl) {
+      fieldEl.textContent = " ";
+    }
+  });
+}
+
+function renderDemoResult(text, className = "") {
+  if (!demoResultEl) return;
+  demoResultEl.textContent = text;
+  demoResultEl.className = "demo-result";
+  if (className) {
+    demoResultEl.classList.add(className);
+  }
+  if (text.trim()) {
+    demoResultEl.classList.add("is-visible");
+  }
+}
+
+function runDemoCycle() {
+  if (!demoNameEl || !demoSaveEl || !demoResultEl) return;
+
+  clearDemoFields();
+  renderDemoResult(" ");
+  demoSaveEl.classList.remove("is-saving");
+
+  DEMO_STEPS.forEach(({ delay, target, value }) => {
+    window.setTimeout(() => {
+      if (target) {
+        target.textContent = value;
+      }
+    }, delay);
+  });
+
+  window.setTimeout(() => {
+    demoSaveEl.classList.add("is-saving");
+  }, 2950);
+
+  window.setTimeout(() => {
+    demoSaveEl.classList.remove("is-saving");
+    renderDemoResult("Carl Simon – Contact Today", "is-lead");
+  }, 3350);
+
+  window.setTimeout(() => {
+    renderDemoResult("Dashboard cleared: 1/1 complete.", "is-clear");
+  }, 4500);
+
+  window.setTimeout(() => {
+    clearDemoFields();
+    renderDemoResult(" ");
+  }, 5650);
+}
+
+function startAuthDemo() {
+  if (!authPage || !demoNameEl || demoLoopIntervalId) return;
+  runDemoCycle();
+  demoLoopIntervalId = window.setInterval(runDemoCycle, DEMO_LOOP_MS);
+}
+
+function stopAuthDemo() {
+  if (!demoLoopIntervalId) return;
+  window.clearInterval(demoLoopIntervalId);
+  demoLoopIntervalId = null;
+}
+
+function initAuthPageAnimations() {
+  const revealSections = document.querySelectorAll(".section-reveal");
+  const revealObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("is-visible");
+        }
+      });
+    },
+    { threshold: 0.18 }
+  );
+
+  revealSections.forEach((sectionEl) => revealObserver.observe(sectionEl));
+
+  if (strippedSectionEl) {
+    const strippedObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          entry.target.classList.toggle("is-active", entry.isIntersecting);
+        });
+      },
+      { threshold: 0.35 }
+    );
+    strippedObserver.observe(strippedSectionEl);
+  }
+
+  if (demoSectionEl) {
+    const demoObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            startAuthDemo();
+          } else {
+            stopAuthDemo();
+          }
+        });
+      },
+      { threshold: 0.3 }
+    );
+    demoObserver.observe(demoSectionEl);
+  }
+}
 
 let currentUser = null;
 let authStateResolved = false;
@@ -3531,9 +3659,12 @@ onAuthStateChanged(auth, async (user) => {
     }
     authPage.classList.remove("hidden");
     appPage.classList.add("hidden");
+    stopAuthDemo();
     setStatus("Please log in to continue.");
   }
 });
+
+initAuthPageAnimations();
 
 window.addEventListener("hashchange", () => {
   if (!authStateResolved) return;
