@@ -8,40 +8,145 @@
   </head>
   <body>
     <main id="auth-page" class="auth-page">
-      <section class="auth-card" aria-labelledby="app-title">
-        <div class="brand-banner auth-brand" aria-label="Product name">smolCRM</div>
-        <h1 id="app-title">smolCRM</h1>
-        <p class="subtext">Sign in or create an account to continue.</p>
+      <div class="auth-top-brand section-reveal" aria-label="Product name">smolCRM</div>
 
-        <form id="auth-form" class="auth-form" novalidate>
-          <label for="email">Email</label>
-          <input
-            id="email"
-            name="email"
-            type="email"
-            autocomplete="email"
-            required
-            placeholder="you@example.com"
-          />
+      <section class="auth-hero section-reveal" aria-labelledby="app-title">
 
-          <label for="password">Password</label>
-          <input
-            id="password"
-            name="password"
-            type="password"
-            autocomplete="current-password"
-            required
-            minlength="6"
-            placeholder="••••••••"
-          />
+        <section class="auth-card" aria-label="Login form">
+          <p class="subtext">Log in to continue.</p>
 
-          <div class="button-row">
-            <button type="button" id="signup-btn">Sign Up</button>
-            <button type="button" id="login-btn">Login</button>
+          <form id="auth-form" class="auth-form" novalidate>
+            <label for="email">Email</label>
+            <input
+              id="email"
+              name="email"
+              type="email"
+              autocomplete="email"
+              required
+              placeholder="you@example.com"
+            />
+
+            <label for="password">Password</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              required
+              minlength="6"
+              placeholder="••••••••"
+            />
+
+            <div class="button-row">
+              <button type="button" id="signup-btn">Sign Up</button>
+              <button type="button" id="login-btn">Login</button>
+            </div>
+            <p class="auth-footnote">No credit card required.</p>
+          </form>
+
+          <p id="auth-status" class="status" role="status" aria-live="polite"></p>
+        </section>
+
+        <h1 id="app-title">Most CRMs Are Built for Business Owners.<span class="headline-break">This One Is Built for You.</span></h1>
+        <p class="auth-subline">
+          CRMs are powerful tools.
+        </p>
+        <p class="auth-copy">
+          But they’re usually sold to management — optimized for reporting, forecasting, and oversight.
+        </p>
+        <p class="auth-copy">That creates friction for the person actually closing deals.</p>
+        <ul class="hero-friction-list" aria-label="Common CRM friction points">
+          <li>Extra required fields.</li>
+          <li>Pipeline configuration.</li>
+          <li>Analytics dashboards.</li>
+          <li>Control-center complexity.</li>
+        </ul>
+        <p class="auth-trialline">smolCRM removes all of it.</p>
+      </section>
+
+      <section class="auth-section auth-section--subtraction section-reveal" id="stripped-section">
+        <div class="subtraction-bg" aria-hidden="true">
+          <div class="sub-wireframe sub-wireframe--complex"></div>
+          <div class="sub-wireframe sub-wireframe--minimal"></div>
+        </div>
+        <div class="auth-section-inner">
+          <h2>A Stripped-Out CRM.</h2>
+          <p>When you want to go faster, you remove weight.</p>
+          <ul>
+            <li>No reporting dashboards.</li>
+            <li>No mandatory deal values.</li>
+            <li>No setup maze.</li>
+            <li>No bureaucracy.</li>
+          </ul>
+          <p class="section-emphasis">Just execution.</p>
+        </div>
+      </section>
+
+      <section class="auth-section auth-section--demo section-reveal" id="demo-section" aria-label="Tactical execution demo">
+        <div class="auth-section-inner">
+          <h2>Tactical Execution</h2>
+          <div class="demo-box" aria-live="polite">
+            <p class="demo-heading">Add Lead</p>
+            <div class="demo-field-grid">
+              <p><span>Name</span><strong id="demo-name">&nbsp;</strong></p>
+              <p><span>Email</span><strong id="demo-email">&nbsp;</strong></p>
+              <p><span>Phone</span><strong id="demo-phone">&nbsp;</strong></p>
+              <p><span>Notes</span><strong id="demo-notes">&nbsp;</strong></p>
+            </div>
+            <button type="button" id="demo-save" class="demo-save-btn" aria-hidden="true">[ Save ]</button>
+            <p id="demo-result" class="demo-result">&nbsp;</p>
           </div>
-        </form>
+          <p id="demo-phrase" class="demo-phrase">Faster than your notes app.</p>
+        </div>
+      </section>
 
-        <p id="auth-status" class="status" role="status" aria-live="polite"></p>
+      <section class="auth-section section-reveal">
+        <div class="auth-section-inner">
+          <h2>Tactical. Not Bureaucratic.</h2>
+          <p>When you're on the floor, you're not analyzing spreadsheets.</p>
+          <p>You're executing.</p>
+          <p>You need a tool that is:</p>
+          <ul>
+            <li>Fast.</li>
+            <li>Reliable.</li>
+            <li>Instant.</li>
+          </ul>
+          <p>Click Add Lead. Enter name, email, phone, notes. Done.</p>
+          <p>No setup. No pipeline design. No required deal values.</p>
+          <p>Everything is automatically scheduled for you.</p>
+        </div>
+      </section>
+
+      <section class="auth-section section-reveal">
+        <div class="auth-section-inner auth-section-inner--narrow">
+          <h2>Your Draft Layer for Any CRM</h2>
+          <p>Already using Salesforce? Dealertrack?
+          MLS? HubSpot?</p>
+          <p>Keep them.</p>
+          <p>Use smolCRM as your execution layer.</p>
+          <p>Draft leads instantly.
+          Stay on top of follow-ups.</p>
+          <p>Enter compliance data later if required.</p>
+          <p>No conflict. No rebellion. Just speed.</p>
+        </div>
+      </section>
+
+      <section class="auth-section auth-section--ritual section-reveal">
+        <div class="auth-section-inner">
+          <h2>Blank the Dashboard Daily.</h2>
+          <p class="ritual-line">Everything is due today.</p>
+          <p class="ritual-line">Log in. Blank the board.</p>
+          <p class="ritual-line">Execute. Clear the board. Repeat.</p>
+        </div>
+      </section>
+
+      <section class="auth-section auth-section--pricing section-reveal">
+        <div class="auth-section-inner">
+          <h2>Free to Start<br />No Credit Card Required.</h2>
+          <p>Test it immediately. No friction. No commitment.</p>
+          <p>Beta access is free. Then just $4.99/month.</p>
+          <p>Built for individuals. Priced for individuals.</p>
+        </div>
       </section>
     </main>
 
