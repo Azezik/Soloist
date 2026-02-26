@@ -3846,12 +3846,13 @@ async function renderSettingsPage() {
 
 function buildSequenceStepState(step = {}, index = 0) {
   const template = normalizePromotionTemplateConfig(step.templateConfig || step.template || {});
+  const triggerImmediatelyAfterPrevious = index > 0 && step.triggerImmediatelyAfterPrevious === true;
   return {
     id: String(step.id || `step-${index + 1}`),
     order: index,
     name: String(step.name || `Step ${index + 1}`),
-    delayDaysFromPrevious: index === 0 ? 0 : Math.max(0, Number(step.delayDaysFromPrevious) || 0),
-    triggerImmediatelyAfterPrevious: index > 0 && step.triggerImmediatelyAfterPrevious === true,
+    delayDaysFromPrevious: index === 0 ? 0 : (triggerImmediatelyAfterPrevious ? 0 : Math.max(0, Number(step.delayDaysFromPrevious) || 0)),
+    triggerImmediatelyAfterPrevious,
     useContactEmail: step.useContactEmail === true,
     toEmail: String(step.toEmail || ""),
     templateConfig: {
@@ -3865,12 +3866,13 @@ function syncSequenceStepsFromForm(steps = []) {
   return steps.map((step, index) => {
     const useContactEmail = document.querySelector(`[data-sequence-step-use-contact-email="${index}"]`)?.checked === true;
     const toFieldValue = document.querySelector(`[data-sequence-step-to="${index}"]`)?.value;
+    const triggerImmediatelyAfterPrevious = index > 0 && document.querySelector(`[data-sequence-step-trigger-immediate="${index}"]`)?.checked === true;
+    const parsedDelayDays = Number.parseInt(document.querySelector(`[data-sequence-step-delay="${index}"]`)?.value || step.delayDaysFromPrevious || 0, 10) || 0;
     return {
       ...step,
       name: String(document.querySelector(`[data-sequence-step-name="${index}"]`)?.value || step.name || `Step ${index + 1}`),
-      delayDaysFromPrevious:
-        index === 0 ? 0 : (Number.parseInt(document.querySelector(`[data-sequence-step-delay="${index}"]`)?.value || step.delayDaysFromPrevious || 0, 10) || 0),
-      triggerImmediatelyAfterPrevious: index > 0 && document.querySelector(`[data-sequence-step-trigger-immediate="${index}"]`)?.checked === true,
+      delayDaysFromPrevious: index === 0 ? 0 : (triggerImmediatelyAfterPrevious ? 0 : Math.max(0, parsedDelayDays)),
+      triggerImmediatelyAfterPrevious,
       useContactEmail,
       toEmail: String(toFieldValue !== undefined ? toFieldValue : (step.toEmail || "")),
       templateConfig: {
@@ -3886,7 +3888,7 @@ function syncSequenceStepsFromForm(steps = []) {
 
 function buildSequenceStepMarkup(step, index) {
   const template = normalizePromotionTemplateConfig(step.templateConfig || {});
-  return `<article class="panel detail-grid promotion-wizard-message-card"><p class="promotion-wizard-card-title"><strong>${escapeHtml(step.name || `Step ${index + 1}`)}</strong></p><label>Step Name<input data-sequence-step-name="${index}" value="${escapeHtml(step.name || `Step ${index + 1}`)}" /></label>${index > 0 ? `<label class="sequence-offset-row"><span>Send this message</span><input class="promotion-wizard-offset-input" type="number" min="0" data-sequence-step-delay="${index}" value="${Number(step.delayDaysFromPrevious) || 0}" /><span>days after the previous step.</span></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-trigger-immediate="${index}" ${step.triggerImmediatelyAfterPrevious ? "checked" : ""} /><span>Trigger immediately upon completion of the previous step</span></label>` : '<p>Step 1 sends at Start Date (or immediately if unset).</p>'}<label>To<input type="email" data-sequence-step-to="${index}" value="${escapeHtml(step.toEmail || "")}" placeholder="person@example.com" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-use-contact-email="${index}" ${step.useContactEmail ? "checked" : ""} /><span>Use contact email for this step</span></label><label>Subject<input data-sequence-step-subject="${index}" value="${escapeHtml(template.subjectText)}" /></label><label>Intro<input data-sequence-step-intro="${index}" value="${escapeHtml(template.introText)}" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-populate-name="${index}" ${template.populateName ? "checked" : ""} /><span>Auto populate name</span></label><label>Body<textarea rows="4" data-sequence-step-body="${index}">${escapeHtml(template.bodyText)}</textarea></label><label>Outro<input data-sequence-step-outro="${index}" value="${escapeHtml(template.outroText)}" /></label></article>`;
+  return `<article class="panel detail-grid promotion-wizard-message-card"><p class="promotion-wizard-card-title"><strong>${escapeHtml(step.name || `Step ${index + 1}`)}</strong></p><label>Step Name<input data-sequence-step-name="${index}" value="${escapeHtml(step.name || `Step ${index + 1}`)}" /></label>${index > 0 ? `<label class="sequence-offset-row"><span>Send this message</span><input class="promotion-wizard-offset-input" type="number" min="0" data-sequence-step-delay="${index}" value="${step.triggerImmediatelyAfterPrevious ? 0 : (Number(step.delayDaysFromPrevious) || 0)}" ${step.triggerImmediatelyAfterPrevious ? "disabled" : ""} /><span>days after the previous step.</span></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-trigger-immediate="${index}" ${step.triggerImmediatelyAfterPrevious ? "checked" : ""} /><span>Trigger immediately upon completion of the previous step</span></label>` : '<p>Step 1 sends at Start Date (or immediately if unset).</p>'}<label>To<input type="email" data-sequence-step-to="${index}" value="${escapeHtml(step.toEmail || "")}" placeholder="person@example.com" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-use-contact-email="${index}" ${step.useContactEmail ? "checked" : ""} /><span>Use contact email for this step</span></label><label>Subject<input data-sequence-step-subject="${index}" value="${escapeHtml(template.subjectText)}" /></label><label>Intro<input data-sequence-step-intro="${index}" value="${escapeHtml(template.introText)}" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-populate-name="${index}" ${template.populateName ? "checked" : ""} /><span>Auto populate name</span></label><label>Body<textarea rows="4" data-sequence-step-body="${index}">${escapeHtml(template.bodyText)}</textarea></label><label>Outro<input data-sequence-step-outro="${index}" value="${escapeHtml(template.outroText)}" /></label></article>`;
 }
 
 function applySequenceStepContactRules(step, index, selectedContact = null) {
@@ -3991,7 +3993,7 @@ async function renderSequenceCreateFlow() {
           startDate: state.startDate ? new Date(state.startDate) : null,
           steps: (state.selectedTemplate?.steps || state.steps || []).map((entry, index) => ({ ...entry, order: index, name: entry.name || `Step ${index + 1}` })),
         };
-        await createSequence({ db, userId: currentUser.uid, sequence: payload, contactId: state.contactId || null });
+        await createSequence({ db, userId: currentUser.uid, sequence: payload, contactId: state.contactId || null, dayStartTime: appSettings.pipeline?.dayStartTime });
         window.location.hash = "#tasks";
       });
       return;
@@ -4025,11 +4027,17 @@ async function renderSequenceCreateFlow() {
         document.querySelector(`[data-sequence-step-trigger-immediate="${index}"]`)?.addEventListener("change", (event) => {
           const delayInput = document.querySelector(`[data-sequence-step-delay="${index}"]`);
           if (!delayInput) return;
+          if (event.target.checked === true) {
+            delayInput.value = "0";
+          }
           delayInput.disabled = event.target.checked === true;
         });
         const immediateChecked = document.querySelector(`[data-sequence-step-trigger-immediate="${index}"]`)?.checked === true;
         const delayInput = document.querySelector(`[data-sequence-step-delay="${index}"]`);
-        if (delayInput && immediateChecked) delayInput.disabled = true;
+        if (delayInput && immediateChecked) {
+          delayInput.value = "0";
+          delayInput.disabled = true;
+        }
       });
 
       document.getElementById("sequence-add-step-btn")?.addEventListener("click", () => {
@@ -4049,7 +4057,7 @@ async function renderSequenceCreateFlow() {
           startDate: state.startDate ? new Date(state.startDate) : null,
           steps: state.steps,
         };
-        await createSequence({ db, userId: currentUser.uid, sequence: payload, contactId: state.contactId || null });
+        await createSequence({ db, userId: currentUser.uid, sequence: payload, contactId: state.contactId || null, dayStartTime: appSettings.pipeline?.dayStartTime });
         window.location.hash = "#tasks";
       });
     }

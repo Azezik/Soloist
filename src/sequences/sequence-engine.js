@@ -1,5 +1,6 @@
 import { addDoc, collection, doc, getDoc, serverTimestamp, setDoc, Timestamp, updateDoc } from "../data/firestore-service.js";
 import { normalizePromotionTemplateConfig, toPromotionTemplatePayload } from "../templates/module.js";
+import { sanitizeTimeString } from "../domain/settings.js";
 
 function clampString(value, maxLen) {
   const normalized = String(value || "");
@@ -34,8 +35,16 @@ function toSequenceDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function computeSequenceStepDates(steps = [], startDate = null) {
+function applyTimeToDate(dateValue, timeValue) {
+  const [hourPart, minutePart] = sanitizeTimeString(timeValue).split(":");
+  const result = new Date(dateValue);
+  result.setHours(Number.parseInt(hourPart, 10), Number.parseInt(minutePart, 10), 0, 0);
+  return result;
+}
+
+function computeSequenceStepDates(steps = [], startDate = null, dayStartTime = "08:30") {
   const dates = [];
+  const hasStartDate = Boolean(startDate);
   let cursor = startDate ? new Date(startDate) : new Date();
   steps.forEach((step, index) => {
     if (index === 0) {
@@ -44,12 +53,15 @@ function computeSequenceStepDates(steps = [], startDate = null) {
     }
     cursor = new Date(cursor);
     cursor.setDate(cursor.getDate() + Math.max(0, Number(step.delayDaysFromPrevious) || 0));
+    if (!hasStartDate) {
+      cursor = applyTimeToDate(cursor, dayStartTime);
+    }
     dates.push(new Date(cursor));
   });
   return dates;
 }
 
-export async function createSequence({ db, userId, sequence, contactId = null }) {
+export async function createSequence({ db, userId, sequence, contactId = null, dayStartTime = "08:30" }) {
   const startDate = toSequenceDate(sequence.startDate);
   const steps = normalizeSequenceSteps(sequence.steps || []);
 
@@ -68,7 +80,7 @@ export async function createSequence({ db, userId, sequence, contactId = null })
     },
   });
 
-  const scheduledDates = computeSequenceStepDates(steps, startDate);
+  const scheduledDates = computeSequenceStepDates(steps, startDate, dayStartTime);
 
   for (let index = 0; index < steps.length; index += 1) {
     const step = steps[index];
