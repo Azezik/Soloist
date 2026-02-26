@@ -45,6 +45,7 @@ function escapeHtml(value = "") {
 
 function getItemClass(itemType) {
   if (itemType === "task") return "calendar-item--task";
+  if (itemType === "sequence" || itemType === "sequence_step") return "calendar-item--sequence";
   if (itemType === "promotion" || itemType === "promotion_touchpoint") return "calendar-item--promotion";
   return "calendar-item--lead";
 }
@@ -56,6 +57,7 @@ function getProjectedClass(item) {
 function renderDragAttributes(item) {
   if (item.isProjected) return "";
   if (item.type === "promotion" || item.type === "promotion_touchpoint") return "";
+  if (item.type === "sequence" || item.type === "sequence_step") return "";
   return `draggable="true" data-drag-item-id="${item.id}" data-drag-item-type="${item.type}"`;
 }
 

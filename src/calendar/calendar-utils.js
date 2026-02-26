@@ -85,7 +85,7 @@ export function normalizeCalendarItems(tasks, leads, promotionEvents = []) {
         id: event.id,
         type: itemType,
         title: event.title || event.name || "Promotion",
-        secondary: "Promotion",
+        secondary: itemType === "sequence" || itemType === "sequence_step" ? "Sequence" : "Promotion",
         date,
         dayKey: toDayKey(date),
         hasTime: hasSpecificTime(date),
