@@ -113,6 +113,25 @@ service cloud.firestore {
         }
       }
 
+      match /sequences/{sequenceId} {
+        allow read: if ownerRead(userId);
+        allow create, update: if ownerCreateUpdate(userId);
+        allow delete: if ownerDelete(userId);
+
+        match /steps/{stepId} {
+          allow read: if ownerRead(userId);
+          allow create, update: if ownerCreateUpdate(userId);
+          allow delete: if ownerDelete(userId);
+
+          match /statuses/{statusId} {
+            allow read: if ownerRead(userId);
+            allow create, update: if ownerCreateUpdate(userId);
+            allow delete: if ownerDelete(userId);
+          }
+        }
+      }
+
+
       // Settings are intentionally multi-document, but scoped to known keys to prevent sprawl.
       match /settings/{settingId} {
         allow read: if ownerRead(userId)

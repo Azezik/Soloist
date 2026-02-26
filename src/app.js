@@ -38,6 +38,7 @@ import {
   syncPromotionTouchpointContainers,
   syncSnappedLeadPromotionPause
 } from "./promotions/promotion-engine.js";
+import { createSequence, markSequenceStepStatus } from "./sequences/sequence-engine.js";
 import {
   DEFAULT_STAGE_TEMPLATE,
   LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER,
@@ -712,6 +713,7 @@ function routeFromHash() {
   if (hash === "add-lead") return { page: "add-lead" };
   if (hash === "leads") return { page: "leads", params };
   if (hash === "tasks") return { page: "tasks" };
+  if (hash === "sequences/new") return { page: "add-sequence" };
   if (hash === "calendar") return { page: "calendar", params };
   if (hash === "tasks/new") return { page: "add-task" };
   if (hash === "add-task") return { page: "add-task" };
@@ -746,6 +748,10 @@ function routeFromHash() {
 
   if (hash.startsWith("promotion-event/")) {
     return { page: "promotion-event-detail", promotionEventId: hash.split("/")[1], params };
+  }
+
+  if (hash.startsWith("sequence-event/")) {
+    return { page: "sequence-event-detail", sequenceEventId: hash.split("/")[1], params };
   }
 
   if (hash.startsWith("promotion/")) {
@@ -847,15 +853,17 @@ async function renderDashboard() {
   const duePromotions = promoEventsSnapshot.docs.map((eventDoc) => {
     const event = { id: eventDoc.id, ...eventDoc.data() };
     const isPromotionEvent = event.type === "promotion" || event.type === "promotion_touchpoint" || Boolean(event.promotionId);
-    if (!isActiveRecord(event) || !isPromotionEvent) return null;
+    const isSequenceEvent = event.type === "sequence" || event.type === "sequence_step" || Boolean(event.sequenceId);
+    if (!isActiveRecord(event) || (!isPromotionEvent && !isSequenceEvent)) return null;
     const contact = event.contactId ? contactById[event.contactId] : null;
-    const isContainer = event.type === "promotion_touchpoint" || !event.leadId;
+    const isContainer = event.type === "promotion_touchpoint" || event.type === "sequence_step" || !event.leadId;
+    const isSequence = isSequenceEvent;
     return {
-      type: "promotion",
+      type: isSequence ? "sequence" : "promotion",
       id: event.id,
       leadId: event.leadId || null,
-      title: isContainer ? (event.title || event.name || "Promotion touchpoint") : (contact?.name || "Unnamed Contact"),
-      subtitle: isContainer ? "Promotion" : (event.touchpointName || event.title || event.name || "Promotion touchpoint"),
+      title: isContainer ? (event.title || event.name || (isSequence ? "Sequence step" : "Promotion touchpoint")) : (contact?.name || "Unnamed Contact"),
+      subtitle: isContainer ? (isSequence ? "Sequence" : "Promotion") : (event.touchpointName || event.stepName || event.title || event.name || "Sequence step"),
       dueAt: event.scheduledFor || event.nextActionAt,
       isContainer,
     };
@@ -871,8 +879,10 @@ async function renderDashboard() {
       return `<article class="panel feed-item feed-item-clickable feed-item--lead" data-open-feed-item="true" data-feed-type="lead" data-feed-id="${item.id}" data-lead-source="${item.source}" tabindex="0" role="button"><p class="feed-type">Lead</p><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p>${item.email ? `<p><strong>Email:</strong> <span class="contact-detail-inline">${escapeHtml(item.email)} <button type="button" class="clipboard-copy-btn" data-copy-text="${escapeHtml(item.email)}" aria-label="Copy email" title="Copy email">${clipboardIconMarkup}</button></span></p>` : ""}<p><strong>Stage:</strong> ${escapeHtml(stageLabel)}${item.product ? `<span class="dashboard-stage-product">• Product: ${escapeHtml(item.product)}</span>` : ""}</p><p><strong>Due:</strong> ${formatDate(item.dueAt)}</p><div class="button-row"><button type="button" class="dashboard-action-btn" data-lead-action="done" data-lead-source="${item.source}" data-lead-id="${item.id}">Done</button><details class="push-menu"><summary class="dashboard-action-btn">Push</summary><div class="push-dropdown" data-push-source="${item.source}" data-push-entity="lead" data-push-id="${item.id}">${pushOptionsMarkup}</div></details></div></article>`;
     }
 
-    if (item.type === "promotion") {
-      return `<article class="panel feed-item feed-item-clickable feed-item--promotion" data-open-feed-item="true" data-feed-type="promotion" data-feed-id="${item.id}" tabindex="0" role="button"><p class="feed-type">Promotion</p><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p><p><strong>Due:</strong> ${formatDate(item.dueAt)}</p><div class="button-row">${item.isContainer ? '<a class="timeline-link-pill" href="' + appendOriginToHash(`#promotion-event/${item.id}`, window.location.hash) + '">Open</a>' : `<button type="button" class="dashboard-action-btn" data-promo-event-done="${item.id}">Done</button>`}</div></article>`;
+    if (item.type === "promotion" || item.type === "sequence") {
+      const eventPath = item.type === "sequence" ? `#sequence-event/${item.id}` : `#promotion-event/${item.id}`;
+      const label = item.type === "sequence" ? "Sequence" : "Promotion";
+      return `<article class="panel feed-item feed-item-clickable feed-item--promotion" data-open-feed-item="true" data-feed-type="${item.type}" data-feed-id="${item.id}" tabindex="0" role="button"><p class="feed-type">${label}</p><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p><p><strong>Due:</strong> ${formatDate(item.dueAt)}</p><div class="button-row">${item.isContainer ? '<a class="timeline-link-pill" href="' + appendOriginToHash(eventPath, window.location.hash) + '">Open</a>' : `<button type="button" class="dashboard-action-btn" data-promo-event-done="${item.id}">Done</button>`}</div></article>`;
     }
 
     return `<article class="panel feed-item feed-item-clickable feed-item--task" data-open-feed-item="true" data-feed-type="task" data-feed-id="${item.id}" tabindex="0" role="button"><p class="feed-type">Task</p><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p><p><strong>Due:</strong> ${formatDate(item.dueAt)}</p>${item.notes ? `<p>${escapeHtml(item.notes)}</p>` : ""}<div class="button-row"><button type="button" class="dashboard-action-btn" data-task-action="done" data-task-id="${item.id}">Done</button><details class="push-menu"><summary class="dashboard-action-btn">Push</summary><div class="push-dropdown" data-push-entity="task" data-push-id="${item.id}">${pushOptionsMarkup}</div></details></div></article>`;
@@ -890,6 +900,7 @@ async function renderDashboard() {
       if (!feedType || !feedId) return;
       if (feedType === "task") return void (window.location.hash = appendOriginToHash(`#task/${feedId}`, window.location.hash));
       if (feedType === "promotion") return void (window.location.hash = appendOriginToHash(`#promotion-event/${feedId}`, window.location.hash));
+      if (feedType === "sequence") return void (window.location.hash = appendOriginToHash(`#sequence-event/${feedId}`, window.location.hash));
       const leadSource = itemEl.dataset.leadSource;
       if (leadSource === "contacts") return void (window.location.hash = appendOriginToHash(`#contact/${feedId}`, window.location.hash));
       window.location.hash = appendOriginToHash(`#lead/${feedId}`, window.location.hash);
@@ -1596,7 +1607,7 @@ async function renderTasksPage() {
     <section class="crm-view crm-view--tasks">
       <div class="view-header">
         <h2>Tasks</h2>
-        <button id="add-task-btn" type="button">Add Task +</button>
+        <div class="view-header-actions"><button id="add-task-btn" type="button">Add Task +</button><button id="add-sequence-btn" type="button" class="secondary-btn">Add Sequence</button></div>
       </div>
       <div class="feed-list">
         ${
@@ -1621,6 +1632,10 @@ async function renderTasksPage() {
 
   document.getElementById("add-task-btn")?.addEventListener("click", () => {
     window.location.hash = "#tasks/new";
+  });
+
+  document.getElementById("add-sequence-btn")?.addEventListener("click", () => {
+    window.location.hash = "#sequences/new";
   });
 
   viewContainer.querySelectorAll("[data-task-id]").forEach((taskEl) => {
@@ -2104,11 +2119,12 @@ async function renderContactDetail(contactId) {
   const originRoute = getCurrentRouteOrigin(route.params);
 
   const contactRef = doc(db, "users", currentUser.uid, "contacts", contactId);
-  const [contactSnapshot, tasksSnapshot, leadsSnapshot, notesSnapshot] = await Promise.all([
+  const [contactSnapshot, tasksSnapshot, leadsSnapshot, notesSnapshot, sequencesSnapshot] = await Promise.all([
     getDoc(contactRef),
     getDocs(query(collection(db, "users", currentUser.uid, "tasks"), where("contactId", "==", contactId))),
     getDocs(query(collection(db, "users", currentUser.uid, "leads"), where("contactId", "==", contactId))),
     getDocs(query(collection(db, "users", currentUser.uid, "notes"), where("contactId", "==", contactId))),
+    getDocs(query(collection(db, "users", currentUser.uid, "sequences"), where("contactId", "==", contactId))),
   ]);
 
   if (!contactSnapshot.exists()) {
@@ -2128,10 +2144,12 @@ async function renderContactDetail(contactId) {
     .map((leadDoc) => ({ id: leadDoc.id, ...leadDoc.data() }))
     .filter((lead) => isActiveRecord(lead));
   const notes = notesSnapshot.docs.map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }));
+  const sequences = sequencesSnapshot.docs.map((sequenceDoc) => ({ id: sequenceDoc.id, ...sequenceDoc.data() }));
 
   const timeline = [
     ...leads.map((lead) => ({ kind: "lead", when: lead.createdAt, label: `Lead ${lead.archived ? "Closed" : "Created"}`, detail: lead.title || lead.summary || "Lead activity", href: appendOriginToHash(`#lead/${lead.id}`, window.location.hash) })),
     ...tasks.map((task) => ({ kind: "task", when: task.createdAt, label: `Task ${task.completed ? "Completed" : "Created"}`, detail: task.title || "Task activity", href: appendOriginToHash(`#task/${task.id}`, window.location.hash) })),
+    ...sequences.map((sequence) => ({ kind: "sequence", when: sequence.createdAt, label: `Sequence ${sequence.status === "completed" ? "Completed" : "Created"}`, detail: sequence.name || "Sequence activity", href: null })),
     ...notes.map((note) => ({ kind: "note", when: note.createdAt, label: "Note", detail: note.noteText, href: null })),
   ].sort((a, b) => (toDate(a.when)?.getTime() || 0) - (toDate(b.when)?.getTime() || 0));
 
@@ -3742,6 +3760,219 @@ async function renderSettingsPage() {
   renderSettingsForm();
 }
 
+
+function buildSequenceStepState(step = {}, index = 0) {
+  const template = normalizePromotionTemplateConfig(step.templateConfig || step.template || {});
+  return {
+    id: String(step.id || `step-${index + 1}`),
+    order: index,
+    name: String(step.name || `Step ${index + 1}`),
+    delayDaysFromPrevious: index === 0 ? 0 : Math.max(0, Number(step.delayDaysFromPrevious) || 0),
+    toEmail: String(step.toEmail || ""),
+    templateConfig: template,
+  };
+}
+
+function syncSequenceStepsFromForm(steps = []) {
+  return steps.map((step, index) => ({
+    ...step,
+    name: String(document.querySelector(`[data-sequence-step-name="${index}"]`)?.value || step.name || `Step ${index + 1}`),
+    delayDaysFromPrevious: index === 0 ? 0 : (Number.parseInt(document.querySelector(`[data-sequence-step-delay="${index}"]`)?.value || step.delayDaysFromPrevious || 0, 10) || 0),
+    toEmail: String(document.querySelector(`[data-sequence-step-to="${index}"]`)?.value || step.toEmail || ""),
+    templateConfig: {
+      subjectText: document.querySelector(`[data-sequence-step-subject="${index}"]`)?.value || "",
+      introText: document.querySelector(`[data-sequence-step-intro="${index}"]`)?.value || "",
+      populateName: document.querySelector(`[data-sequence-step-populate-name="${index}"]`)?.checked === true,
+      bodyText: document.querySelector(`[data-sequence-step-body="${index}"]`)?.value || "",
+      outroText: document.querySelector(`[data-sequence-step-outro="${index}"]`)?.value || "",
+    },
+  }));
+}
+
+function buildSequenceStepMarkup(step, index) {
+  const template = normalizePromotionTemplateConfig(step.templateConfig || {});
+  return `<article class="panel detail-grid promotion-wizard-message-card"><p class="promotion-wizard-card-title"><strong>${escapeHtml(step.name || `Step ${index + 1}`)}</strong></p><label>Step Name<input data-sequence-step-name="${index}" value="${escapeHtml(step.name || `Step ${index + 1}`)}" /></label>${index > 0 ? `<label>Send this message <input class="promotion-wizard-offset-input" type="number" min="0" data-sequence-step-delay="${index}" value="${Number(step.delayDaysFromPrevious) || 0}" /> days after the previous step.</label>` : '<p>Step 1 sends at Start Date (or immediately if unset).</p>'}<label>To<input type="email" data-sequence-step-to="${index}" value="${escapeHtml(step.toEmail || "")}" placeholder="person@example.com" /></label><label>Subject<input data-sequence-step-subject="${index}" value="${escapeHtml(template.subjectText)}" /></label><label>Intro<input data-sequence-step-intro="${index}" value="${escapeHtml(template.introText)}" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-populate-name="${index}" ${template.populateName ? "checked" : ""} /><span>Populate name</span></label><label>Body<textarea rows="4" data-sequence-step-body="${index}">${escapeHtml(template.bodyText)}</textarea></label><label>Outro<input data-sequence-step-outro="${index}" value="${escapeHtml(template.outroText)}" /></label></article>`;
+}
+
+async function renderSequenceCreateFlow() {
+  renderLoading("Loading sequences...");
+  const [sequencesSnapshot, contactsSnapshot] = await Promise.all([
+    getDocs(query(collection(db, "users", currentUser.uid, "sequences"), orderBy("createdAt", "desc"))),
+    getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
+  ]);
+  const existing = sequencesSnapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const contacts = contactsSnapshot.docs.map((d) => ({ id: d.id, ...d.data() })).filter((c) => isActiveRecord(c));
+
+  const state = {
+    page: "select",
+    selectedTemplate: null,
+    sequenceName: "",
+    startDate: "",
+    contactId: "",
+    steps: [buildSequenceStepState({}, 0)],
+  };
+
+  const render = () => {
+    if (state.page === "select") {
+      const options = existing.length
+        ? `<div class="feed-list">${existing.map((entry) => `<button type="button" class="panel feed-item" data-select-sequence-template="${entry.id}"><h3>${escapeHtml(entry.name || "Untitled Sequence")}</h3><p>${Array.isArray(entry.steps) ? entry.steps.length : 0} steps</p></button>`).join("")}</div>`
+        : '<button type="button" id="configure-sequence-btn">Configure New Sequence</button>';
+      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Sequence</h2><div class="view-header-actions"><button id="sequence-cancel-btn" type="button" class="secondary-btn">Back</button></div></div><div class="panel"><h3>Select Sequence</h3>${options}</div></section>`;
+      document.getElementById("sequence-cancel-btn")?.addEventListener("click", () => { window.location.hash = "#tasks"; });
+      document.getElementById("configure-sequence-btn")?.addEventListener("click", () => { state.page = "configure"; render(); });
+      document.querySelectorAll("[data-select-sequence-template]").forEach((buttonEl) => {
+        buttonEl.addEventListener("click", () => {
+          const selected = existing.find((entry) => entry.id === buttonEl.dataset.selectSequenceTemplate);
+          state.selectedTemplate = selected || null;
+          state.sequenceName = selected?.name || "";
+          state.steps = (selected?.steps || []).map((step, index) => buildSequenceStepState(step, index));
+          if (!state.steps.length) state.steps = [buildSequenceStepState({}, 0)];
+          state.page = "configure";
+          render();
+        });
+      });
+      return;
+    }
+
+    if (state.page === "configure") {
+      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>New Sequence</h2></div><div class="panel detail-grid"><p><strong>${escapeHtml(state.selectedTemplate?.name || state.sequenceName || "Configure New Sequence")}</strong></p><label>Sequence Name<input id="sequence-name-input" value="${escapeHtml(state.sequenceName || state.selectedTemplate?.name || "")}" /></label><label>Add Contact (optional)<select id="sequence-contact-id"><option value="">No contact</option>${contacts.map((c) => `<option value="${c.id}" ${state.contactId === c.id ? "selected" : ""}>${escapeHtml(c.name || c.email || "Unnamed")}</option>`).join("")}</select></label><label>Start Date (optional)<input id="sequence-start-date" type="datetime-local" value="${escapeHtml(state.startDate)}" /></label></div><div class="button-row"><button id="sequence-prev-btn" type="button" class="secondary-btn">Back</button><button id="sequence-next-btn" type="button">Next</button></div></section>`;
+      document.getElementById("sequence-prev-btn")?.addEventListener("click", () => { state.page = "select"; render(); });
+      document.getElementById("sequence-next-btn")?.addEventListener("click", () => {
+        state.sequenceName = document.getElementById("sequence-name-input")?.value || state.sequenceName || "";
+        state.contactId = document.getElementById("sequence-contact-id")?.value || "";
+        state.startDate = document.getElementById("sequence-start-date")?.value || "";
+        state.page = "steps";
+        render();
+      });
+      return;
+    }
+
+    if (state.page === "steps") {
+      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(state.sequenceName || "New Sequence")}</h2></div><div class="promotion-wizard-message-list">${state.steps.map((step, index) => buildSequenceStepMarkup(step, index)).join("")}</div><div class="button-row"><button id="sequence-add-step-btn" type="button" class="secondary-btn">Add Sequence Step</button><button id="sequence-steps-prev-btn" type="button" class="secondary-btn">Back</button><button id="sequence-create-btn" type="button">Create</button></div></section>`;
+      document.getElementById("sequence-add-step-btn")?.addEventListener("click", () => {
+        state.steps = syncSequenceStepsFromForm(state.steps);
+        state.steps.push(buildSequenceStepState({ name: `Step ${state.steps.length + 1}`, delayDaysFromPrevious: 1 }, state.steps.length));
+        render();
+      });
+      document.getElementById("sequence-steps-prev-btn")?.addEventListener("click", () => {
+        state.steps = syncSequenceStepsFromForm(state.steps);
+        state.page = "configure";
+        render();
+      });
+      document.getElementById("sequence-create-btn")?.addEventListener("click", async () => {
+        state.steps = syncSequenceStepsFromForm(state.steps).map((entry, index) => ({ ...entry, order: index, name: entry.name || `Step ${index + 1}` }));
+        const payload = {
+          name: state.sequenceName || state.selectedTemplate?.name || "Untitled Sequence",
+          startDate: state.startDate ? new Date(state.startDate) : null,
+          steps: state.steps,
+        };
+        await createSequence({ db, userId: currentUser.uid, sequence: payload, contactId: state.contactId || null });
+        window.location.hash = "#tasks";
+      });
+    }
+  };
+
+  render();
+}
+
+async function renderSequenceEventDetail(eventId) {
+  renderLoading("Loading sequence event...");
+  const route = routeFromHash();
+  const originRoute = getCurrentRouteOrigin(route.params);
+
+  const eventRef = doc(db, "users", currentUser.uid, "events", eventId);
+  const eventSnapshot = await getDoc(eventRef);
+  if (!eventSnapshot.exists()) {
+    viewContainer.innerHTML = '<p class="view-message">Sequence event not found.</p>';
+    return;
+  }
+
+  const event = { id: eventSnapshot.id, ...eventSnapshot.data() };
+  if (!event.sequenceId) {
+    viewContainer.innerHTML = '<p class="view-message">Sequence not found.</p>';
+    return;
+  }
+
+  const [sequenceSnapshot, eventsSnapshot] = await Promise.all([
+    getDoc(doc(db, "users", currentUser.uid, "sequences", event.sequenceId)),
+    getDocs(query(collection(db, "users", currentUser.uid, "events"), where("sequenceId", "==", event.sequenceId))),
+  ]);
+  if (!sequenceSnapshot.exists()) {
+    viewContainer.innerHTML = '<p class="view-message">Sequence not found.</p>';
+    return;
+  }
+  const sequence = { id: sequenceSnapshot.id, ...sequenceSnapshot.data() };
+  const events = eventsSnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })).sort((a, b) => (Number(a.stepOrder) || 0) - (Number(b.stepOrder) || 0));
+
+  const current = events.find((entry) => entry.id === eventId) || event;
+  const next = events.find((entry) => (Number(entry.stepOrder) || 0) > (Number(current.stepOrder) || 0) && !entry.completed && entry.status !== "skipped");
+  const completed = events.filter((entry) => entry.completed || entry.status === "skipped");
+  const templateConfig = normalizePromotionTemplateConfig(current.templateConfig || current.template || {});
+  const mailPreview = renderTemplateWithLead(templateConfig, "").trim();
+
+  const renderStepCard = (entry, withActions = false) => {
+    const cfg = normalizePromotionTemplateConfig(entry.templateConfig || entry.template || {});
+    const body = renderTemplateWithLead(cfg, "").trim();
+    const to = String(entry.toEmail || "").trim();
+    const stateLabel = entry.status === "skipped" ? "Skipped" : entry.completed ? "Done" : "Open";
+    return `<article class="promo-touchpoint-lead-card panel panel--lead ${entry.completed || entry.status === "skipped" ? "promo-touchpoint-lead-card--completed" : ""}"><div class="promo-touchpoint-lead-meta"><p class="promo-touchpoint-lead-name">${escapeHtml(entry.stepName || "Step")}</p><p class="promo-touchpoint-lead-detail">Scheduled for ${escapeHtml(formatDate(entry.scheduledFor))}</p><p class="promo-touchpoint-lead-status">Status: ${escapeHtml(stateLabel)}</p></div>${withActions ? `<div class="promo-touchpoint-lead-actions"><div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-open-mail="${entry.id}" ${to ? `data-mail-to="${escapeHtml(to)}"` : "disabled"} data-mail-subject="${escapeHtml(cfg.subjectText || "")}" data-mail-body="${escapeHtml(body)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(body)}">Copy</button></div><div class="promo-touchpoint-action-divider" aria-hidden="true"></div><div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-step-done="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-sequence-step-skip="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Skip</button></div></div>` : ""}</article>`;
+  };
+
+  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequence.name || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button></div></div><div class="panel panel--lead detail-grid feed-item--promotion"><p><strong>Sequence:</strong> ${escapeHtml(sequence.name || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div><div class="panel panel--lead notes-panel"><label class="full-width">Template Preview<textarea rows="5" readonly>${escapeHtml(mailPreview)}</textarea></label><div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
+
+  document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
+    window.location.hash = originRoute || "#dashboard";
+  });
+
+  document.querySelectorAll("[data-sequence-open-mail]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", () => {
+      const to = buttonEl.dataset.mailTo || "";
+      if (!to) return;
+      const subject = encodeURIComponent(buttonEl.dataset.mailSubject || "");
+      const body = encodeURIComponent(buttonEl.dataset.mailBody || "");
+      window.open(`mailto:${encodeURIComponent(to)}?subject=${subject}&body=${body}`, "_blank");
+    });
+  });
+
+  const reconcile = async () => {
+    const refreshed = await getDocs(query(collection(db, "users", currentUser.uid, "events"), where("sequenceId", "==", event.sequenceId)));
+    const unresolved = refreshed.docs.some((docItem) => {
+      const value = docItem.data() || {};
+      return value.completed !== true && value.status !== "skipped";
+    });
+    if (!unresolved) {
+      await updateDoc(doc(db, "users", currentUser.uid, "sequences", event.sequenceId), {
+        status: "completed",
+        updatedAt: serverTimestamp(),
+      });
+    }
+  };
+
+  document.querySelectorAll("[data-sequence-step-done]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", async () => {
+      const targetId = buttonEl.dataset.sequenceStepDone;
+      const target = events.find((entry) => entry.id === targetId);
+      if (!target) return;
+      await markSequenceStepStatus({ db, userId: currentUser.uid, event: target, status: "completed" });
+      await reconcile();
+      await renderSequenceEventDetail(targetId);
+    });
+  });
+
+  document.querySelectorAll("[data-sequence-step-skip]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", async () => {
+      const targetId = buttonEl.dataset.sequenceStepSkip;
+      const target = events.find((entry) => entry.id === targetId);
+      if (!target) return;
+      await markSequenceStepStatus({ db, userId: currentUser.uid, event: target, status: "skipped" });
+      await reconcile();
+      await renderSequenceEventDetail(targetId);
+    });
+  });
+
+  attachClipboardHandlers(viewContainer);
+}
+
 async function renderCurrentRoute() {
   if (!authStateResolved || !currentUser) return;
 
@@ -3770,6 +4001,11 @@ async function renderCurrentRoute() {
 
     if (route.page === "add-task") {
       await renderAddTaskForm();
+      return;
+    }
+
+    if (route.page === "add-sequence") {
+      await renderSequenceCreateFlow();
       return;
     }
 
@@ -3833,6 +4069,11 @@ async function renderCurrentRoute() {
 
     if (route.page === "promotion-event-detail" && route.promotionEventId) {
       await renderPromotionEventDetail(route.promotionEventId);
+      return;
+    }
+
+    if (route.page === "sequence-event-detail" && route.sequenceEventId) {
+      await renderSequenceEventDetail(route.sequenceEventId);
       return;
     }
 
