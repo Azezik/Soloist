@@ -1,4 +1,4 @@
-import { addDoc, collection, doc, getDoc, serverTimestamp, setDoc, Timestamp, updateDoc } from "../data/firestore-service.js";
+import { addDoc, collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, Timestamp, updateDoc, where } from "../data/firestore-service.js";
 import { normalizePromotionTemplateConfig, toPromotionTemplatePayload } from "../templates/module.js";
 import { sanitizeTimeString } from "../domain/settings.js";
 
@@ -203,5 +203,42 @@ export async function markSequenceStepStatus({ db, userId, event, status }) {
     nextActionAt: nowTimestamp,
     blockedUntilPreviousComplete: false,
     updatedAt: serverTimestamp(),
+  });
+}
+
+export async function truncateSequenceInstanceFromStep({ db, userId, event }) {
+  if (!event?.sequenceId) return;
+  const sequenceId = event.sequenceId;
+  const targetStepOrder = Number(event.stepOrder);
+  if (Number.isNaN(targetStepOrder)) return;
+
+  const eventsSnapshot = await getDocs(query(collection(db, "users", userId, "events"), where("sequenceId", "==", sequenceId)));
+  const sequenceEvents = eventsSnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }));
+  const eventsToDelete = sequenceEvents.filter((entry) => Number(entry.stepOrder) >= targetStepOrder && entry.deleted !== true);
+  const now = serverTimestamp();
+
+  await Promise.all(eventsToDelete.map((entry) => updateDoc(doc(db, "users", userId, "events", entry.id), {
+    status: "truncated",
+    archived: true,
+    deleted: true,
+    truncatedAt: now,
+    updatedAt: now,
+  })));
+
+  await Promise.all(eventsToDelete
+    .filter((entry) => entry.stepId)
+    .map((entry) => setDoc(doc(db, "users", userId, "sequences", sequenceId, "steps", entry.stepId, "statuses", "single"), {
+      status: "truncated",
+      completed: false,
+      skipped: false,
+      truncatedAt: now,
+      updatedAt: now,
+    }, { merge: true })));
+
+  await updateDoc(doc(db, "users", userId, "sequences", sequenceId), {
+    status: "completed",
+    endedAt: now,
+    truncatedFromStepOrder: targetStepOrder,
+    updatedAt: now,
   });
 }
