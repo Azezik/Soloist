@@ -2709,7 +2709,10 @@ async function renderPromotionEventDetail(eventId) {
     const activeLeadMarkup = leadCards.filter((entry) => !entry.isCompleted).map((entry) => entry.markup).join("");
     const completedLeadMarkup = leadCards.filter((entry) => entry.isCompleted).map((entry) => entry.markup).join("");
 
-    const mailPreview = renderTemplateWithLead(templateConfig, contact?.name || "").trim();
+    const previewLead = leadIds.map((leadId) => leadsById[leadId]).find(Boolean) || {};
+    const previewContact = contactsById[previewLead.contactId] || {};
+    const previewName = previewContact.name || previewLead.name || "";
+    const mailPreview = renderTemplateWithLead(templateConfig, previewName).trim();
 
     viewContainer.innerHTML = `
       <section class="crm-view crm-view--promotions">
