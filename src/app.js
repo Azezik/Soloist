@@ -3950,7 +3950,8 @@ function applySequenceStepContactRules(step, index, selectedContact = null) {
 
 async function renderSequenceCreateFlow() {
   renderLoading("Loading sequences...");
-  const [sequencesSnapshot, contactsSnapshot] = await Promise.all([
+  const [appSettings, sequencesSnapshot, contactsSnapshot] = await Promise.all([
+    getAppSettings(currentUser.uid),
     getDocs(query(collection(db, "users", currentUser.uid, "sequences"), orderBy("createdAt", "desc"))),
     getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
   ]);
