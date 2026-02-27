@@ -3847,6 +3847,7 @@ async function renderSettingsPage() {
 function buildSequenceStepState(step = {}, index = 0) {
   const template = normalizePromotionTemplateConfig(step.templateConfig || step.template || {});
   const triggerImmediatelyAfterPrevious = index > 0 && step.triggerImmediatelyAfterPrevious === true;
+  const stepType = step.stepType === "task_reminder" ? "task_reminder" : "email";
   return {
     id: String(step.id || `step-${index + 1}`),
     order: index,
@@ -3855,6 +3856,11 @@ function buildSequenceStepState(step = {}, index = 0) {
     triggerImmediatelyAfterPrevious,
     useContactEmail: step.useContactEmail === true,
     toEmail: String(step.toEmail || ""),
+    stepType,
+    taskConfig: {
+      title: String(step?.taskConfig?.title || step?.taskTitle || "").trim(),
+      notes: String(step?.taskConfig?.notes || step?.taskNotes || "").trim(),
+    },
     templateConfig: {
       ...template,
       populateName: template.populateName === true && step.useContactEmail === true,
@@ -3864,6 +3870,8 @@ function buildSequenceStepState(step = {}, index = 0) {
 
 function syncSequenceStepsFromForm(steps = []) {
   return steps.map((step, index) => {
+    const stepTypeValue = document.querySelector(`[data-sequence-step-type="${index}"]`)?.value;
+    const stepType = stepTypeValue === "task_reminder" ? "task_reminder" : "email";
     const useContactEmail = document.querySelector(`[data-sequence-step-use-contact-email="${index}"]`)?.checked === true;
     const toFieldValue = document.querySelector(`[data-sequence-step-to="${index}"]`)?.value;
     const triggerImmediatelyAfterPrevious = index > 0 && document.querySelector(`[data-sequence-step-trigger-immediate="${index}"]`)?.checked === true;
@@ -3875,6 +3883,11 @@ function syncSequenceStepsFromForm(steps = []) {
       triggerImmediatelyAfterPrevious,
       useContactEmail,
       toEmail: String(toFieldValue !== undefined ? toFieldValue : (step.toEmail || "")),
+      stepType,
+      taskConfig: {
+        title: document.querySelector(`[data-sequence-step-task-title="${index}"]`)?.value || "",
+        notes: document.querySelector(`[data-sequence-step-task-notes="${index}"]`)?.value || "",
+      },
       templateConfig: {
         subjectText: document.querySelector(`[data-sequence-step-subject="${index}"]`)?.value || "",
         introText: document.querySelector(`[data-sequence-step-intro="${index}"]`)?.value || "",
@@ -3888,10 +3901,24 @@ function syncSequenceStepsFromForm(steps = []) {
 
 function buildSequenceStepMarkup(step, index) {
   const template = normalizePromotionTemplateConfig(step.templateConfig || {});
-  return `<article class="panel detail-grid promotion-wizard-message-card"><p class="promotion-wizard-card-title"><strong>${escapeHtml(step.name || `Step ${index + 1}`)}</strong></p><label>Step Name<input data-sequence-step-name="${index}" value="${escapeHtml(step.name || `Step ${index + 1}`)}" /></label>${index > 0 ? `<label class="sequence-offset-row"><span>Send this message</span><input class="promotion-wizard-offset-input" type="number" min="0" data-sequence-step-delay="${index}" value="${step.triggerImmediatelyAfterPrevious ? 0 : (Number(step.delayDaysFromPrevious) || 0)}" ${step.triggerImmediatelyAfterPrevious ? "disabled" : ""} /><span>days after the previous step.</span></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-trigger-immediate="${index}" ${step.triggerImmediatelyAfterPrevious ? "checked" : ""} /><span>Trigger immediately upon completion of the previous step</span></label>` : '<p>Step 1 sends at Start Date (or immediately if unset).</p>'}<label>To<input type="email" data-sequence-step-to="${index}" value="${escapeHtml(step.toEmail || "")}" placeholder="person@example.com" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-use-contact-email="${index}" ${step.useContactEmail ? "checked" : ""} /><span>Use contact email for this step</span></label><label>Subject<input data-sequence-step-subject="${index}" value="${escapeHtml(template.subjectText)}" /></label><label>Intro<input data-sequence-step-intro="${index}" value="${escapeHtml(template.introText)}" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-populate-name="${index}" ${template.populateName ? "checked" : ""} /><span>Auto populate name</span></label><label>Body<textarea rows="4" data-sequence-step-body="${index}">${escapeHtml(template.bodyText)}</textarea></label><label>Outro<input data-sequence-step-outro="${index}" value="${escapeHtml(template.outroText)}" /></label></article>`;
+  const stepType = step.stepType === "task_reminder" ? "task_reminder" : "email";
+  const taskTitle = String(step?.taskConfig?.title || "");
+  const taskNotes = String(step?.taskConfig?.notes || "");
+  return `<article class="panel detail-grid promotion-wizard-message-card"><p class="promotion-wizard-card-title"><strong>${escapeHtml(step.name || `Step ${index + 1}`)}</strong></p><label>Step Type<select data-sequence-step-type="${index}"><option value="email" ${stepType === "email" ? "selected" : ""}>Email</option><option value="task_reminder" ${stepType === "task_reminder" ? "selected" : ""}>Task Reminder</option></select></label><label>Step Name<input data-sequence-step-name="${index}" value="${escapeHtml(step.name || `Step ${index + 1}`)}" /></label>${index > 0 ? `<label class="sequence-offset-row"><span>Send this message</span><input class="promotion-wizard-offset-input" type="number" min="0" data-sequence-step-delay="${index}" value="${step.triggerImmediatelyAfterPrevious ? 0 : (Number(step.delayDaysFromPrevious) || 0)}" ${step.triggerImmediatelyAfterPrevious ? "disabled" : ""} /><span>days after the previous step.</span></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-trigger-immediate="${index}" ${step.triggerImmediatelyAfterPrevious ? "checked" : ""} /><span>Trigger immediately upon completion of the previous step</span></label>` : '<p>Step 1 sends at Start Date (or immediately if unset).</p>'}<div data-sequence-email-fields="${index}" class="${stepType === "task_reminder" ? "hidden" : ""}"><label>To<input type="email" data-sequence-step-to="${index}" value="${escapeHtml(step.toEmail || "")}" placeholder="person@example.com" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-use-contact-email="${index}" ${step.useContactEmail ? "checked" : ""} /><span>Use contact email for this step</span></label><label>Subject<input data-sequence-step-subject="${index}" value="${escapeHtml(template.subjectText)}" /></label><label>Intro<input data-sequence-step-intro="${index}" value="${escapeHtml(template.introText)}" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-populate-name="${index}" ${template.populateName ? "checked" : ""} /><span>Auto populate name</span></label><label>Body<textarea rows="4" data-sequence-step-body="${index}">${escapeHtml(template.bodyText)}</textarea></label><label>Outro<input data-sequence-step-outro="${index}" value="${escapeHtml(template.outroText)}" /></label></div><div data-sequence-task-fields="${index}" class="${stepType === "task_reminder" ? "" : "hidden"}"><label>Title<input data-sequence-step-task-title="${index}" value="${escapeHtml(taskTitle)}" /></label><label class="full-width">Notes<textarea rows="4" data-sequence-step-task-notes="${index}">${escapeHtml(taskNotes)}</textarea></label></div></article>`;
+}
+
+function applySequenceStepTypeRules(index) {
+  const stepTypeSelect = document.querySelector(`[data-sequence-step-type="${index}"]`);
+  const emailFields = document.querySelector(`[data-sequence-email-fields="${index}"]`);
+  const taskFields = document.querySelector(`[data-sequence-task-fields="${index}"]`);
+  const stepType = stepTypeSelect?.value === "task_reminder" ? "task_reminder" : "email";
+  if (emailFields) emailFields.classList.toggle("hidden", stepType !== "email");
+  if (taskFields) taskFields.classList.toggle("hidden", stepType !== "task_reminder");
 }
 
 function applySequenceStepContactRules(step, index, selectedContact = null) {
+  const stepType = document.querySelector(`[data-sequence-step-type="${index}"]`)?.value || step.stepType || "email";
+  if (stepType !== "email") return;
   const toInput = document.querySelector(`[data-sequence-step-to="${index}"]`);
   const useContactCheckbox = document.querySelector(`[data-sequence-step-use-contact-email="${index}"]`);
   const populateNameCheckbox = document.querySelector(`[data-sequence-step-populate-name="${index}"]`);
@@ -3923,7 +3950,8 @@ function applySequenceStepContactRules(step, index, selectedContact = null) {
 
 async function renderSequenceCreateFlow() {
   renderLoading("Loading sequences...");
-  const [sequencesSnapshot, contactsSnapshot] = await Promise.all([
+  const [appSettings, sequencesSnapshot, contactsSnapshot] = await Promise.all([
+    getAppSettings(currentUser.uid),
     getDocs(query(collection(db, "users", currentUser.uid, "sequences"), orderBy("createdAt", "desc"))),
     getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
   ]);
@@ -4020,7 +4048,12 @@ async function renderSequenceCreateFlow() {
       viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(state.sequenceName || "New Sequence")}</h2></div><div class="promotion-wizard-message-list">${state.steps.map((step, index) => buildSequenceStepMarkup(step, index)).join("")}</div><div class="button-row"><button id="sequence-add-step-btn" type="button" class="secondary-btn">Add Sequence Step</button><button id="sequence-steps-prev-btn" type="button" class="secondary-btn">Back</button><button id="sequence-create-btn" type="button">Create</button></div></section>`;
 
       state.steps.forEach((step, index) => {
+        applySequenceStepTypeRules(index);
         applySequenceStepContactRules(step, index, selectedContact);
+        document.querySelector(`[data-sequence-step-type="${index}"]`)?.addEventListener("change", () => {
+          applySequenceStepTypeRules(index);
+          applySequenceStepContactRules(step, index, selectedContact);
+        });
         document.querySelector(`[data-sequence-step-use-contact-email="${index}"]`)?.addEventListener("change", () => {
           applySequenceStepContactRules(step, index, selectedContact);
         });
@@ -4100,18 +4133,32 @@ async function renderSequenceEventDetail(eventId) {
   const current = events.find((entry) => entry.id === eventId) || event;
   const next = events.find((entry) => (Number(entry.stepOrder) || 0) > (Number(current.stepOrder) || 0) && !entry.completed && entry.status !== "skipped");
   const completed = events.filter((entry) => entry.completed || entry.status === "skipped");
+  const stepType = current.stepType === "task_reminder" ? "task_reminder" : "email";
   const templateConfig = normalizePromotionTemplateConfig(current.templateConfig || current.template || {});
   const mailPreview = renderTemplateWithLead(templateConfig, contact?.name || "").trim();
+  const taskTitle = String(current?.taskConfig?.title || current?.taskTitle || current.stepName || "Task Reminder").trim();
+  const taskNotes = String(current?.taskConfig?.notes || current?.taskNotes || "").trim();
 
   const renderStepCard = (entry, withActions = false) => {
+    const entryType = entry.stepType === "task_reminder" ? "task_reminder" : "email";
     const cfg = normalizePromotionTemplateConfig(entry.templateConfig || entry.template || {});
     const body = renderTemplateWithLead(cfg, contact?.name || "").trim();
     const to = String(entry.useContactEmail ? (contact?.email || "") : (entry.toEmail || "")).trim();
     const stateLabel = entry.status === "skipped" ? "Skipped" : entry.completed ? "Done" : "Open";
-    return `<article class="promo-touchpoint-lead-card panel panel--sequence ${entry.completed || entry.status === "skipped" ? "promo-touchpoint-lead-card--completed" : ""}"><div class="promo-touchpoint-lead-meta"><p class="promo-touchpoint-lead-name">${escapeHtml(entry.stepName || "Step")}</p><p class="promo-touchpoint-lead-detail">Scheduled for ${escapeHtml(formatDate(entry.scheduledFor))}</p><p class="promo-touchpoint-lead-status">Status: ${escapeHtml(stateLabel)}</p></div>${withActions ? `<div class="promo-touchpoint-lead-actions"><div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-open-mail="${entry.id}" ${to ? `data-mail-to="${escapeHtml(to)}"` : "disabled"} data-mail-subject="${escapeHtml(cfg.subjectText || "")}" data-mail-body="${escapeHtml(body)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(body)}">Copy</button></div><div class="promo-touchpoint-action-divider" aria-hidden="true"></div><div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-step-done="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-sequence-step-skip="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Skip</button></div></div>` : ""}</article>`;
+    const actionMarkup = withActions
+      ? `<div class="promo-touchpoint-lead-actions">${entryType === "email" ? `<div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-open-mail="${entry.id}" ${to ? `data-mail-to="${escapeHtml(to)}"` : "disabled"} data-mail-subject="${escapeHtml(cfg.subjectText || "")}" data-mail-body="${escapeHtml(body)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(body)}">Copy</button></div><div class="promo-touchpoint-action-divider" aria-hidden="true"></div>` : ""}<div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-step-done="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-sequence-step-skip="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Skip</button></div></div>`
+      : "";
+    const reminderContent = entryType === "task_reminder"
+      ? `<div class="detail-grid"><p><strong>Task Name:</strong> ${escapeHtml(String(entry?.taskConfig?.title || entry?.taskTitle || entry.stepName || "Task Reminder"))}</p><label class="full-width">Notes<textarea rows="3" readonly>${escapeHtml(String(entry?.taskConfig?.notes || entry?.taskNotes || ""))}</textarea></label></div>`
+      : "";
+    return `<article class="promo-touchpoint-lead-card panel panel--sequence ${entry.completed || entry.status === "skipped" ? "promo-touchpoint-lead-card--completed" : ""}"><div class="promo-touchpoint-lead-meta"><p class="promo-touchpoint-lead-name">${escapeHtml(entry.stepName || "Step")}</p><p class="promo-touchpoint-lead-detail">Scheduled for ${escapeHtml(formatDate(entry.scheduledFor))}</p><p class="promo-touchpoint-lead-status">Status: ${escapeHtml(stateLabel)}</p></div>${reminderContent}${actionMarkup}</article>`;
   };
 
-  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequence.name || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button></div></div><div class="panel panel--sequence detail-grid feed-item--sequence"><p><strong>Sequence:</strong> ${escapeHtml(sequence.name || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div><div class="panel panel--lead notes-panel"><label class="full-width">Template Preview<textarea rows="5" readonly>${escapeHtml(mailPreview)}</textarea></label><div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
+  const previewMarkup = stepType === "task_reminder"
+    ? `<div class="detail-grid"><p><strong>Task Name:</strong> ${escapeHtml(taskTitle)}</p><label class="full-width">Notes<textarea rows="4" readonly>${escapeHtml(taskNotes)}</textarea></label></div>`
+    : `<label class="full-width">Template Preview<textarea rows="5" readonly>${escapeHtml(mailPreview)}</textarea></label>`;
+
+  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequence.name || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button></div></div><div class="panel panel--sequence detail-grid feed-item--sequence"><p><strong>Sequence:</strong> ${escapeHtml(sequence.name || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
 
   document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
     window.location.hash = originRoute || "#dashboard";

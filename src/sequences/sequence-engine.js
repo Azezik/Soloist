@@ -13,6 +13,11 @@ function normalizeSequenceSteps(rawSteps = []) {
       const order = Number.isInteger(step?.order) ? step.order : index;
       const delayDays = Number.parseInt(step?.delayDaysFromPrevious, 10);
       const templateConfig = normalizePromotionTemplateConfig(step?.templateConfig || step?.template || {});
+      const stepType = step?.stepType === "task_reminder" ? "task_reminder" : "email";
+      const taskConfig = {
+        title: clampString(step?.taskConfig?.title || step?.taskTitle || "", 500),
+        notes: clampString(step?.taskConfig?.notes || step?.taskNotes || "", 5000),
+      };
       return {
         id: String(step?.id || `step-${index + 1}`),
         order,
@@ -21,6 +26,10 @@ function normalizeSequenceSteps(rawSteps = []) {
         triggerImmediatelyAfterPrevious: order > 0 && step?.triggerImmediatelyAfterPrevious === true,
         useContactEmail: step?.useContactEmail === true,
         toEmail: String(step?.toEmail || "").trim(),
+        stepType,
+        taskConfig,
+        taskTitle: taskConfig.title,
+        taskNotes: taskConfig.notes,
         template: toPromotionTemplatePayload(templateConfig),
         templateConfig,
       };
@@ -100,6 +109,10 @@ export async function createSequence({ db, userId, sequence, contactId = null, d
       triggerImmediatelyAfterPrevious: step.triggerImmediatelyAfterPrevious === true,
       template: step.template,
       templateConfig: step.templateConfig || step.template,
+      stepType: step.stepType || "email",
+      taskConfig: step.taskConfig || { title: "", notes: "" },
+      taskTitle: step.taskTitle || step.taskConfig?.title || "",
+      taskNotes: step.taskNotes || step.taskConfig?.notes || "",
       title: clampString(`${sequence.name || "Sequence"} — ${step.name || `Step ${step.order + 1}`}`, 200),
       name: clampString(`${sequence.name || "Sequence"} — ${step.name || `Step ${step.order + 1}`}`, 500),
       summary: clampString(`${sequence.name || "Sequence"} · ${step.name || `Step ${step.order + 1}`}`, 5000),
