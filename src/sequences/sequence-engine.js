@@ -7,6 +7,13 @@ function clampString(value, maxLen) {
   return normalized.length <= maxLen ? normalized : normalized.slice(0, maxLen);
 }
 
+export function composeSequenceDisplayName({ name, instanceName } = {}) {
+  const baseName = String(name || "Untitled Sequence").trim() || "Untitled Sequence";
+  const suffix = String(instanceName || "").trim();
+  if (!suffix) return baseName;
+  return `${baseName} — ${suffix}`;
+}
+
 function normalizeSequenceSteps(rawSteps = []) {
   return rawSteps
     .map((step, index) => {
@@ -73,9 +80,17 @@ function computeSequenceStepDates(steps = [], startDate = null, dayStartTime = "
 export async function createSequence({ db, userId, sequence, contactId = null, dayStartTime = "08:30" }) {
   const startDate = toSequenceDate(sequence.startDate);
   const steps = normalizeSequenceSteps(sequence.steps || []);
+  const baseSequenceName = clampString(sequence.name || "Untitled Sequence", 500);
+  const sequenceInstanceName = clampString(sequence.instanceName || "", 500).trim();
+  const sequenceDisplayName = composeSequenceDisplayName({
+    name: baseSequenceName,
+    instanceName: sequenceInstanceName,
+  });
 
   const sequenceRef = await addDoc(collection(db, "users", userId, "sequences"), {
-    name: clampString(sequence.name || "Untitled Sequence", 500),
+    name: baseSequenceName,
+    instanceName: sequenceInstanceName || null,
+    displayName: clampString(sequenceDisplayName, 500),
     startDate: startDate ? Timestamp.fromDate(startDate) : null,
     steps,
     contactId: contactId || null,
@@ -84,6 +99,7 @@ export async function createSequence({ db, userId, sequence, contactId = null, d
     updatedAt: serverTimestamp(),
     configSnapshot: {
       ...sequence,
+      instanceName: sequenceInstanceName || null,
       steps,
       contactId: contactId || null,
     },
@@ -113,9 +129,9 @@ export async function createSequence({ db, userId, sequence, contactId = null, d
       taskConfig: step.taskConfig || { title: "", notes: "" },
       taskTitle: step.taskTitle || step.taskConfig?.title || "",
       taskNotes: step.taskNotes || step.taskConfig?.notes || "",
-      title: clampString(`${sequence.name || "Sequence"} — ${step.name || `Step ${step.order + 1}`}`, 200),
-      name: clampString(`${sequence.name || "Sequence"} — ${step.name || `Step ${step.order + 1}`}`, 500),
-      summary: clampString(`${sequence.name || "Sequence"} · ${step.name || `Step ${step.order + 1}`}`, 5000),
+      title: clampString(`${sequenceDisplayName} — ${step.name || `Step ${step.order + 1}`}`, 200),
+      name: clampString(`${sequenceDisplayName} — ${step.name || `Step ${step.order + 1}`}`, 500),
+      summary: clampString(`${sequenceDisplayName} · ${step.name || `Step ${step.order + 1}`}`, 5000),
       scheduledFor,
       nextActionAt: scheduledFor,
       blockedUntilPreviousComplete: isLockedUntilPreviousComplete,
