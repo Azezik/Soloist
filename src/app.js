@@ -38,7 +38,7 @@ import {
   syncPromotionTouchpointContainers,
   syncSnappedLeadPromotionPause
 } from "./promotions/promotion-engine.js";
-import { composeSequenceDisplayName, createSequence, markSequenceStepStatus } from "./sequences/sequence-engine.js";
+import { composeSequenceDisplayName, createSequence, markSequenceStepStatus, truncateSequenceInstanceFromStep } from "./sequences/sequence-engine.js";
 import {
   DEFAULT_STAGE_TEMPLATE,
   LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER,
@@ -376,6 +376,13 @@ function formatDateForSpreadsheet(value) {
   const mm = String(date.getMonth() + 1).padStart(2, "0");
   const dd = String(date.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function dateTimeLocalInputValue(value) {
+  const dateValue = dateInputValue(value);
+  const timeValue = timeInputValue(value);
+  if (!dateValue || !timeValue) return "";
+  return `${dateValue}T${timeValue}`;
 }
 
 function parseImportDate(value) {
@@ -795,6 +802,10 @@ function routeFromHash() {
   }
 
   if (hash.startsWith("sequence-event/")) {
+    if (hash.endsWith("/edit")) {
+      const parts = hash.split("/");
+      return { page: "sequence-event-edit", sequenceEventId: parts[1], params };
+    }
     return { page: "sequence-event-detail", sequenceEventId: hash.split("/")[1], params };
   }
 
@@ -4161,7 +4172,7 @@ async function renderSequenceEventDetail(eventId) {
   }
 
   const event = { id: eventSnapshot.id, ...eventSnapshot.data() };
-  if (!event.sequenceId) {
+  if (!isActiveRecord(event) || !event.sequenceId) {
     viewContainer.innerHTML = '<p class="view-message">Sequence not found.</p>';
     return;
   }
@@ -4177,7 +4188,7 @@ async function renderSequenceEventDetail(eventId) {
   const sequence = { id: sequenceSnapshot.id, ...sequenceSnapshot.data() };
   const contactSnapshot = sequence.contactId ? await getDoc(doc(db, "users", currentUser.uid, "contacts", sequence.contactId)) : null;
   const contact = contactSnapshot?.exists() ? { id: contactSnapshot.id, ...contactSnapshot.data() } : null;
-  const events = eventsSnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })).sort((a, b) => (Number(a.stepOrder) || 0) - (Number(b.stepOrder) || 0));
+  const events = eventsSnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })).filter((entry) => isActiveRecord(entry)).sort((a, b) => (Number(a.stepOrder) || 0) - (Number(b.stepOrder) || 0));
 
   const current = events.find((entry) => entry.id === eventId) || event;
   const next = events.find((entry) => (Number(entry.stepOrder) || 0) > (Number(current.stepOrder) || 0) && !entry.completed && entry.status !== "skipped");
@@ -4205,10 +4216,14 @@ async function renderSequenceEventDetail(eventId) {
     : `<label class="full-width">Template Preview<textarea rows="5" readonly>${escapeHtml(mailPreview)}</textarea></label>`;
 
   const sequenceDisplayName = composeSequenceDisplayName(sequence);
-  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button></div></div><div class="panel panel--sequence detail-grid feed-item--sequence"><p><strong>Sequence:</strong> ${escapeHtml(sequenceDisplayName || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
+  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div><div class="panel panel--sequence detail-grid feed-item--sequence"><p><strong>Sequence:</strong> ${escapeHtml(sequenceDisplayName || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
 
   document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
     window.location.hash = originRoute || "#dashboard";
+  });
+
+  document.getElementById("edit-sequence-step-btn")?.addEventListener("click", () => {
+    window.location.hash = appendOriginToHash(`#sequence-event/${eventId}/edit`, originRoute || `#sequence-event/${eventId}`);
   });
 
   document.querySelectorAll("[data-sequence-open-mail]").forEach((buttonEl) => {
@@ -4258,6 +4273,63 @@ async function renderSequenceEventDetail(eventId) {
   });
 
   attachClipboardHandlers(viewContainer);
+}
+
+async function renderEditSequenceEventForm(eventId) {
+  renderLoading("Loading sequence step...");
+  const route = routeFromHash();
+  const originRoute = getCurrentRouteOrigin(route.params);
+  const eventRef = doc(db, "users", currentUser.uid, "events", eventId);
+  const eventSnapshot = await getDoc(eventRef);
+  if (!eventSnapshot.exists()) {
+    viewContainer.innerHTML = '<p class="view-message">Sequence event not found.</p>';
+    return;
+  }
+
+  const event = { id: eventSnapshot.id, ...eventSnapshot.data() };
+  if (!isActiveRecord(event) || !event.sequenceId) {
+    viewContainer.innerHTML = '<p class="view-message">Sequence event not found.</p>';
+    return;
+  }
+
+  const sequenceSnapshot = await getDoc(doc(db, "users", currentUser.uid, "sequences", event.sequenceId));
+  const sequence = sequenceSnapshot.exists() ? { id: sequenceSnapshot.id, ...sequenceSnapshot.data() } : null;
+  const sequenceDisplayName = composeSequenceDisplayName(sequence || {});
+  const detailRoute = appendOriginToHash(`#sequence-event/${eventId}`, originRoute);
+
+  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>Edit Sequence Step</h2></div><form id="sequence-step-edit-form" class="panel panel--lead form-grid"><p><strong>Sequence:</strong> ${escapeHtml(sequenceDisplayName || "Untitled sequence")}</p><label>Step Name<input id="sequence-step-name" value="${escapeHtml(event.stepName || "")}" /></label><label>Due<input id="sequence-step-due" type="datetime-local" value="${escapeHtml(dateTimeLocalInputValue(event.scheduledFor))}" /></label><div class="button-row full-width"><button type="submit">Save</button><button id="sequence-step-cancel-btn" type="button" class="secondary-btn">Cancel</button><button id="sequence-step-delete-btn" type="button" class="secondary-btn danger-btn">Delete</button></div></form></section>`;
+
+  document.getElementById("sequence-step-edit-form")?.addEventListener("submit", async (submitEvent) => {
+    submitEvent.preventDefault();
+    const stepName = String(document.getElementById("sequence-step-name")?.value || "").trim() || event.stepName || "Step";
+    const dueValue = String(document.getElementById("sequence-step-due")?.value || "").trim();
+    const dueDate = dueValue ? new Date(dueValue) : null;
+    if (dueValue && Number.isNaN(dueDate?.getTime())) {
+      alert("Please provide a valid due date.");
+      return;
+    }
+
+    const dueTimestamp = dueDate ? Timestamp.fromDate(dueDate) : null;
+    await updateDoc(eventRef, {
+      stepName,
+      scheduledFor: dueTimestamp,
+      nextActionAt: dueTimestamp,
+      updatedAt: serverTimestamp(),
+    });
+    window.location.hash = detailRoute;
+  });
+
+  document.getElementById("sequence-step-cancel-btn")?.addEventListener("click", () => {
+    window.location.hash = detailRoute;
+  });
+
+  document.getElementById("sequence-step-delete-btn")?.addEventListener("click", async () => {
+    if (!window.confirm("Delete this step and all future steps for this sequence instance? This cannot be undone.")) {
+      return;
+    }
+    await truncateSequenceInstanceFromStep({ db, userId: currentUser.uid, event });
+    navigateAfterDelete(originRoute, "#dashboard");
+  });
 }
 
 async function renderCurrentRoute() {
@@ -4361,6 +4433,11 @@ async function renderCurrentRoute() {
 
     if (route.page === "sequence-event-detail" && route.sequenceEventId) {
       await renderSequenceEventDetail(route.sequenceEventId);
+      return;
+    }
+
+    if (route.page === "sequence-event-edit" && route.sequenceEventId) {
+      await renderEditSequenceEventForm(route.sequenceEventId);
       return;
     }
 
