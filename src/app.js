@@ -4136,9 +4136,6 @@ async function renderSequenceEventDetail(eventId) {
   const stepType = current.stepType === "task_reminder" ? "task_reminder" : "email";
   const templateConfig = normalizePromotionTemplateConfig(current.templateConfig || current.template || {});
   const mailPreview = renderTemplateWithLead(templateConfig, contact?.name || "").trim();
-  const taskTitle = String(current?.taskConfig?.title || current?.taskTitle || current.stepName || "Task Reminder").trim();
-  const taskNotes = String(current?.taskConfig?.notes || current?.taskNotes || "").trim();
-
   const renderStepCard = (entry, withActions = false) => {
     const entryType = entry.stepType === "task_reminder" ? "task_reminder" : "email";
     const cfg = normalizePromotionTemplateConfig(entry.templateConfig || entry.template || {});
@@ -4155,7 +4152,7 @@ async function renderSequenceEventDetail(eventId) {
   };
 
   const previewMarkup = stepType === "task_reminder"
-    ? `<div class="detail-grid"><p><strong>Task Name:</strong> ${escapeHtml(taskTitle)}</p><label class="full-width">Notes<textarea rows="4" readonly>${escapeHtml(taskNotes)}</textarea></label></div>`
+    ? ""
     : `<label class="full-width">Template Preview<textarea rows="5" readonly>${escapeHtml(mailPreview)}</textarea></label>`;
 
   viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequence.name || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button></div></div><div class="panel panel--sequence detail-grid feed-item--sequence"><p><strong>Sequence:</strong> ${escapeHtml(sequence.name || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
