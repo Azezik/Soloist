@@ -928,7 +928,7 @@ async function renderDashboard() {
       const label = item.type === "sequence" ? "Sequence" : "Promotion";
       const feedClass = item.type === "sequence" ? "feed-item--sequence" : "feed-item--promotion";
       const actionsMarkup = item.type === "sequence"
-        ? `<button type="button" class="dashboard-action-btn" data-promo-event-done="${item.id}">Done</button><details class="push-menu"><summary class="dashboard-action-btn">Push</summary><div class="push-dropdown" data-push-entity="sequence" data-push-id="${item.id}">${pushOptionsMarkup}</div></details>`
+        ? `<button type="button" class="dashboard-action-btn" data-sequence-event-done="${item.id}">Done</button><details class="push-menu"><summary class="dashboard-action-btn">Push</summary><div class="push-dropdown" data-push-entity="sequence" data-push-id="${item.id}">${pushOptionsMarkup}</div></details>`
         : (item.isContainer ? '<a class="timeline-link-pill" href="' + appendOriginToHash(eventPath, window.location.hash) + '">Open</a>' : `<button type="button" class="dashboard-action-btn" data-promo-event-done="${item.id}">Done</button>`);
       return `<article class="panel feed-item feed-item-clickable ${feedClass}" data-open-feed-item="true" data-feed-type="${item.type}" data-feed-id="${item.id}" tabindex="0" role="button"><p class="feed-type">${label}</p><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.subtitle)}</p><p><strong>Due:</strong> ${formatDate(item.dueAt)}</p><div class="button-row">${actionsMarkup}</div></article>`;
     }
@@ -962,6 +962,15 @@ async function renderDashboard() {
       const eventId = buttonEl.dataset.promoEventDone;
       if (!eventId) return;
       await markPromotionEventDone(eventId);
+      await renderDashboard();
+    });
+  });
+
+  viewContainer.querySelectorAll("[data-sequence-event-done]").forEach((buttonEl) => {
+    buttonEl.addEventListener("click", async () => {
+      const eventId = buttonEl.dataset.sequenceEventDone;
+      if (!eventId) return;
+      await markSequenceEventDone(eventId);
       await renderDashboard();
     });
   });
@@ -2577,6 +2586,30 @@ async function markPromotionEventDone(eventId) {
   });
 
   await reconcilePromotionLeadProgress({ ...event, completedAt }, eventId);
+}
+
+async function markSequenceEventDone(eventId) {
+  const eventRef = doc(db, "users", currentUser.uid, "events", eventId);
+  const eventSnapshot = await getDoc(eventRef);
+  if (!eventSnapshot.exists()) return;
+
+  const event = { id: eventSnapshot.id, ...eventSnapshot.data() };
+  if (!event.sequenceId || !event.stepId) return;
+  if (event.completed || event.status === "skipped") return;
+
+  await markSequenceStepStatus({ db, userId: currentUser.uid, event, status: "completed" });
+
+  const refreshed = await getDocs(query(collection(db, "users", currentUser.uid, "events"), where("sequenceId", "==", event.sequenceId)));
+  const unresolved = refreshed.docs.some((docItem) => {
+    const value = docItem.data() || {};
+    return value.completed !== true && value.status !== "skipped";
+  });
+  if (!unresolved) {
+    await updateDoc(doc(db, "users", currentUser.uid, "sequences", event.sequenceId), {
+      status: "completed",
+      updatedAt: serverTimestamp(),
+    });
+  }
 }
 
 async function markPromotionEventSkipped(eventId) {
@@ -4206,7 +4239,7 @@ async function renderSequenceEventDetail(eventId) {
       if (!target) return;
       await markSequenceStepStatus({ db, userId: currentUser.uid, event: target, status: "completed" });
       await reconcile();
-      await renderSequenceEventDetail(targetId);
+      window.location.hash = originRoute || "#dashboard";
     });
   });
 
