@@ -66,7 +66,34 @@ function getContactFirstName(contactName = "") {
   return firstPart || "";
 }
 
-function renderTemplateWithLead(templateConfig, leadContactName = "") {
+function applyContactPlaceholders(templateText = "", contactData = null) {
+  const sourceText = String(templateText ?? "");
+  if (!sourceText.includes("[") || !contactData || typeof contactData !== "object") {
+    return sourceText;
+  }
+
+  const normalizedContactFields = Object.entries(contactData).reduce((acc, [key, value]) => {
+    const normalizedKey = String(key || "").trim().toLowerCase();
+    if (!normalizedKey || value == null) return acc;
+
+    const normalizedValue = String(value).trim();
+    if (!normalizedValue) return acc;
+
+    acc[normalizedKey] = normalizedValue;
+    return acc;
+  }, {});
+
+  return sourceText.replace(/\[([^\]]+)\]/g, (token, rawFieldName) => {
+    const normalizedFieldName = String(rawFieldName || "").trim().toLowerCase();
+    if (!normalizedFieldName || normalizedFieldName === "name") return token;
+
+    return Object.prototype.hasOwnProperty.call(normalizedContactFields, normalizedFieldName)
+      ? normalizedContactFields[normalizedFieldName]
+      : token;
+  });
+}
+
+function renderTemplateWithLead(templateConfig, leadContactName = "", contactData = null) {
   const config = normalizeStageTemplateConfig(templateConfig);
   const firstName = getContactFirstName(leadContactName);
   const introText = config.introText.trim();
@@ -89,7 +116,8 @@ function renderTemplateWithLead(templateConfig, leadContactName = "") {
   }
 
   const assembledTemplate = parts.join("\n\n").trimEnd();
-  return assembledTemplate ? `${assembledTemplate}\n` : "";
+  const resolvedTemplate = applyContactPlaceholders(assembledTemplate, contactData);
+  return resolvedTemplate ? `${resolvedTemplate}\n` : "";
 }
 
 function normalizePromotionTemplateConfig(input = {}) {
@@ -180,6 +208,7 @@ export {
   normalizeStageTemplateEntry,
   normalizeStageTemplates,
   normalizePromotionTemplateConfig,
+  applyContactPlaceholders,
   renderTemplateWithLead,
   toPromotionTemplatePayload,
 };
