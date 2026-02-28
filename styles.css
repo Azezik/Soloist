@@ -521,6 +521,68 @@ button:active {
   gap: 0.75rem;
 }
 
+
+.subevent-progress {
+  --subevent-progress-color: var(--crm-border);
+  width: 100%;
+  margin: 0.2rem 0 1rem;
+  padding: 0 0.45rem;
+}
+
+.subevent-progress__rail {
+  width: min(100%, calc(var(--subevent-step-count, 1) * 7.5rem));
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+}
+
+.subevent-progress__node {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid var(--subevent-progress-color);
+  background: transparent;
+  flex: 0 0 auto;
+}
+
+.subevent-progress__segment {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 8px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.subevent-progress__segment::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--subevent-progress-color);
+  transform: scaleX(0);
+  transform-origin: left;
+}
+
+.subevent-progress__segment.is-filled::after {
+  animation: subevent-progress-fill 220ms ease-out forwards;
+  animation-delay: calc(var(--progress-order, 0) * 55ms);
+}
+
+.subevent-progress__node.is-filled {
+  background: var(--subevent-progress-color);
+  animation: subevent-progress-node 220ms ease-out both;
+  animation-delay: calc(var(--progress-order, 0) * 55ms);
+}
+
+@keyframes subevent-progress-fill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes subevent-progress-node {
+  from { transform: scale(0.86); opacity: 0.3; }
+  to { transform: scale(1); opacity: 1; }
+}
+
 .lead-state-switcher {
   display: inline-flex;
   border: 1px solid var(--crm-border);
