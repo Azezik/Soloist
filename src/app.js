@@ -403,103 +403,6 @@ function buildSubEventProgressMarkup({
   return `<div class="subevent-progress" style="--subevent-progress-color:${color};--subevent-step-count:${total};" role="img" aria-label="${escapeHtml(`${ariaLabel}: ${filledCount} of ${total}`)}"><div class="subevent-progress__rail">${stepsMarkup}</div></div>`;
 }
 
-function buildSubEventTimelineMarkup({
-  entityType = "task",
-  steps = [],
-  currentIndex = 0,
-  ariaLabel = "Sub-event timeline",
-} = {}) {
-  const total = Math.max(1, steps.length || 1);
-  const boundedIndex = clampNumber(Number.parseInt(currentIndex, 10) || 0, 0, total - 1);
-  const color = SUB_EVENT_PROGRESS_COLOR_BY_TYPE[entityType] || "var(--crm-border)";
-  const normalizedSteps = (steps.length ? steps : [{ id: "single-step", label: "Step 1" }]).map((step, index) => {
-    const state = step.state || (index < boundedIndex ? "completed" : index === boundedIndex ? "current" : "future");
-    return {
-      ...step,
-      state,
-      label: step.label || `Step ${index + 1}`,
-      tooltip: step.scheduledFor
-        ? `${step.label || `Step ${index + 1}`} — Scheduled for ${formatDate(step.scheduledFor)}`
-        : `${step.label || `Step ${index + 1}`}`,
-    };
-  });
-
-  const bulbsMarkup = normalizedSteps.map((step, index) => {
-    const isCurrent = step.state === "current";
-    const classes = ["subevent-timeline__node", `is-${step.state}`];
-    if (isCurrent) classes.push("is-current");
-    const node = `<button type="button" class="${classes.join(" ")}" data-timeline-node="${index}" ${step.targetId ? `data-target-id="${escapeHtml(step.targetId)}"` : ""} ${step.targetHash ? `data-target-hash="${escapeHtml(step.targetHash)}"` : ""} title="${escapeHtml(step.tooltip)}" aria-label="${escapeHtml(step.tooltip)}"></button>`;
-    if (index === normalizedSteps.length - 1) return node;
-    const segmentState = index < boundedIndex ? "completed" : "future";
-    return `${node}<span class="subevent-timeline__segment is-${segmentState}" aria-hidden="true"></span>`;
-  }).join("");
-
-  return `<div class="subevent-timeline" style="--subevent-progress-color:${color};--subevent-step-count:${total};" data-subevent-timeline="true" data-current-index="${boundedIndex}" role="group" aria-label="${escapeHtml(ariaLabel)}"><div class="subevent-timeline__scroller"><div class="subevent-timeline__rail">${bulbsMarkup}</div></div></div>`;
-}
-
-function initializeSubEventTimelines(container) {
-  const scope = container || document;
-  scope.querySelectorAll("[data-subevent-timeline='true']").forEach((timelineEl) => {
-    const scroller = timelineEl.querySelector(".subevent-timeline__scroller");
-    if (!scroller) return;
-
-    const centerNode = (nodeEl, smooth = false) => {
-      if (!nodeEl) return;
-      const targetLeft = nodeEl.offsetLeft - (scroller.clientWidth / 2) + (nodeEl.clientWidth / 2);
-      scroller.scrollTo({ left: Math.max(0, targetLeft), behavior: smooth ? "smooth" : "auto" });
-    };
-
-    const currentIndex = Number.parseInt(timelineEl.dataset.currentIndex || "0", 10) || 0;
-    centerNode(timelineEl.querySelector(`[data-timeline-node='${currentIndex}']`), false);
-
-    let isDragging = false;
-    let dragStartX = 0;
-    let dragStartScrollLeft = 0;
-
-    scroller.addEventListener("wheel", (event) => {
-      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-      scroller.scrollLeft += event.deltaY;
-      event.preventDefault();
-    }, { passive: false });
-
-    scroller.addEventListener("mousedown", (event) => {
-      isDragging = true;
-      dragStartX = event.pageX;
-      dragStartScrollLeft = scroller.scrollLeft;
-      scroller.classList.add("is-dragging");
-    });
-    window.addEventListener("mouseup", () => {
-      isDragging = false;
-      scroller.classList.remove("is-dragging");
-    });
-    scroller.addEventListener("mouseleave", () => {
-      isDragging = false;
-      scroller.classList.remove("is-dragging");
-    });
-    scroller.addEventListener("mousemove", (event) => {
-      if (!isDragging) return;
-      event.preventDefault();
-      const walk = event.pageX - dragStartX;
-      scroller.scrollLeft = dragStartScrollLeft - walk;
-    });
-
-    timelineEl.querySelectorAll("[data-timeline-node]").forEach((nodeEl) => {
-      nodeEl.addEventListener("click", () => {
-        centerNode(nodeEl, true);
-        const targetHash = nodeEl.dataset.targetHash;
-        if (targetHash) {
-          window.location.hash = targetHash;
-          return;
-        }
-        const targetId = nodeEl.dataset.targetId;
-        if (!targetId) return;
-        const targetCard = scope.querySelector(`[data-sub-event-card='${targetId}']`);
-        targetCard?.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
-      });
-    });
-  });
-}
-
 function formatDateForSpreadsheet(value) {
   const date = toDate(value);
   if (!date) return "";
@@ -2828,11 +2731,10 @@ async function renderPromotionEventDetail(eventId) {
     }
 
     const leadIds = Array.isArray(promotion.leadIds) ? promotion.leadIds : [];
-    const [leadsSnapshot, contactsSnapshot, statusesSnapshot, promotionEventsSnapshot] = await Promise.all([
+    const [leadsSnapshot, contactsSnapshot, statusesSnapshot] = await Promise.all([
       getDocs(collection(db, "users", currentUser.uid, "leads")),
       getDocs(collection(db, "users", currentUser.uid, "contacts")),
       getDocs(collection(db, "users", currentUser.uid, "promotions", event.promotionId, "touchpoints", event.touchpointId, "statuses")),
-      getDocs(query(collection(db, "users", currentUser.uid, "events"), where("promotionId", "==", event.promotionId))),
     ]);
 
     const leadsById = leadsSnapshot.docs.reduce((acc, leadDoc) => {
@@ -2851,28 +2753,11 @@ async function renderPromotionEventDetail(eventId) {
     const templateConfig = normalizePromotionTemplateConfig(touchpoint.templateConfig || touchpoint.template || event.templateConfig || {});
     const touchpoints = Array.isArray(promotion.touchpoints) ? promotion.touchpoints : [];
     const touchpointIndex = Math.max(0, touchpoints.findIndex((entry) => entry.id === event.touchpointId));
-    const promotionEvents = promotionEventsSnapshot.docs
-      .map((entryDoc) => ({ id: entryDoc.id, ...entryDoc.data() }))
-      .filter((entry) => isActiveRecord(entry) && entry.type === "promotion_touchpoint");
-    const promotionEventByTouchpointId = promotionEvents.reduce((acc, entry) => {
-      if (!entry.touchpointId) return acc;
-      acc[entry.touchpointId] = entry;
-      return acc;
-    }, {});
-    const promotionProgressMarkup = buildSubEventTimelineMarkup({
+    const promotionProgressMarkup = buildSubEventProgressMarkup({
       entityType: "promotion",
-      steps: touchpoints.map((entry, index) => {
-        const linkedEvent = promotionEventByTouchpointId[entry.id] || null;
-        return {
-          id: entry.id,
-          label: entry.name || `Touchpoint ${index + 1}`,
-          scheduledFor: linkedEvent?.scheduledFor || null,
-          state: index < touchpointIndex ? "completed" : index === touchpointIndex ? "current" : "future",
-          targetHash: linkedEvent ? `#promotion-event/${linkedEvent.id}` : "",
-        };
-      }),
+      totalSubEvents: touchpoints.length || 1,
       currentIndex: touchpointIndex,
-      ariaLabel: "Promotion touchpoint timeline",
+      ariaLabel: "Promotion touchpoint progress",
     });
 
     const leadCards = leadIds.map((leadId) => {
@@ -2927,7 +2812,6 @@ async function renderPromotionEventDetail(eventId) {
         </div>
       </section>
     `;
-    initializeSubEventTimelines(viewContainer);
 
     document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
       window.location.hash = originRoute || "#dashboard";
@@ -4387,6 +4271,8 @@ async function renderSequenceEventDetail(eventId) {
   const events = eventsSnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })).filter((entry) => isActiveRecord(entry)).sort((a, b) => (Number(a.stepOrder) || 0) - (Number(b.stepOrder) || 0));
 
   const current = events.find((entry) => entry.id === eventId) || event;
+  const next = events.find((entry) => (Number(entry.stepOrder) || 0) > (Number(current.stepOrder) || 0) && !entry.completed && entry.status !== "skipped");
+  const completed = events.filter((entry) => entry.completed || entry.status === "skipped");
   const stepType = current.stepType === "task_reminder" ? "task_reminder" : "email";
   const templateConfig = normalizePromotionTemplateConfig(current.templateConfig || current.template || {});
   const mailPreview = renderTemplateWithLead(templateConfig, contact?.name || "").trim();
@@ -4402,7 +4288,7 @@ async function renderSequenceEventDetail(eventId) {
     const reminderContent = entryType === "task_reminder"
       ? `<div class="detail-grid"><p><strong>Task Name:</strong> ${escapeHtml(String(entry?.taskConfig?.title || entry?.taskTitle || entry.stepName || "Task Reminder"))}</p><label class="full-width">Notes<textarea rows="3" readonly>${escapeHtml(String(entry?.taskConfig?.notes || entry?.taskNotes || ""))}</textarea></label></div>`
       : "";
-    return `<article class="promo-touchpoint-lead-card panel panel--sequence ${entry.completed || entry.status === "skipped" ? "promo-touchpoint-lead-card--completed" : ""} ${withActions ? "promo-touchpoint-lead-card--focused" : ""}" data-sub-event-card="${escapeHtml(entry.id)}"><div class="promo-touchpoint-lead-meta"><p class="promo-touchpoint-lead-name">${escapeHtml(entry.stepName || "Step")}</p><p class="promo-touchpoint-lead-detail">Scheduled for ${escapeHtml(formatDate(entry.scheduledFor))}</p><p class="promo-touchpoint-lead-status">Status: ${escapeHtml(stateLabel)}</p></div>${reminderContent}${actionMarkup}</article>`;
+    return `<article class="promo-touchpoint-lead-card panel panel--sequence ${entry.completed || entry.status === "skipped" ? "promo-touchpoint-lead-card--completed" : ""}"><div class="promo-touchpoint-lead-meta"><p class="promo-touchpoint-lead-name">${escapeHtml(entry.stepName || "Step")}</p><p class="promo-touchpoint-lead-detail">Scheduled for ${escapeHtml(formatDate(entry.scheduledFor))}</p><p class="promo-touchpoint-lead-status">Status: ${escapeHtml(stateLabel)}</p></div>${reminderContent}${actionMarkup}</article>`;
   };
 
   const previewMarkup = stepType === "task_reminder"
@@ -4411,20 +4297,13 @@ async function renderSequenceEventDetail(eventId) {
 
   const sequenceDisplayName = composeSequenceDisplayName(sequence);
   const sequenceProgressIndex = Math.max(0, events.findIndex((entry) => entry.id === current.id));
-  const sequenceProgressMarkup = buildSubEventTimelineMarkup({
+  const sequenceProgressMarkup = buildSubEventProgressMarkup({
     entityType: "sequence",
-    steps: events.map((entry, index) => ({
-      id: entry.id,
-      label: entry.stepName || `Step ${index + 1}`,
-      scheduledFor: entry.scheduledFor,
-      state: entry.completed || entry.status === "skipped" ? "completed" : entry.id === current.id ? "current" : "future",
-      targetId: entry.id,
-    })),
+    totalSubEvents: events.length || 1,
     currentIndex: sequenceProgressIndex,
-    ariaLabel: "Sequence step timeline",
+    ariaLabel: "Sequence step progress",
   });
-  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div>${sequenceProgressMarkup}<div class="panel panel--sequence detail-grid feed-item--sequence"><p><strong>Sequence:</strong> ${escapeHtml(sequenceDisplayName || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Timeline Steps</h3><div class="promo-touchpoint-lead-list">${events.length ? events.map((entry) => renderStepCard(entry, entry.id === current.id)).join("") : '<p class="view-message">No steps found.</p>'}</div></div></div></div></section>`;
-  initializeSubEventTimelines(viewContainer);
+  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div>${sequenceProgressMarkup}<div class="panel panel--sequence detail-grid feed-item--sequence"><p><strong>Sequence:</strong> ${escapeHtml(sequenceDisplayName || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
 
   document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
     window.location.hash = originRoute || "#dashboard";
