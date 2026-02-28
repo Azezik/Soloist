@@ -4344,11 +4344,20 @@ async function renderSequenceEventDetail(eventId) {
     return;
   }
   const sequence = { id: sequenceSnapshot.id, ...sequenceSnapshot.data() };
-  const contactSnapshot = sequence.contactId ? await getDoc(doc(db, "users", currentUser.uid, "contacts", sequence.contactId)) : null;
-  const contact = contactSnapshot?.exists() ? { id: contactSnapshot.id, ...contactSnapshot.data() } : null;
   const events = eventsSnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })).filter((entry) => isActiveRecord(entry)).sort((a, b) => (Number(a.stepOrder) || 0) - (Number(b.stepOrder) || 0));
 
   const current = events.find((entry) => entry.id === eventId) || event;
+  const resolvedSequenceContactId = [
+    sequence.contactId,
+    current.contactId,
+    event.contactId,
+    ...events.map((entry) => entry.contactId),
+  ].map((value) => String(value || "").trim()).find((value) => value);
+  const contactSnapshot = resolvedSequenceContactId
+    ? await getDoc(doc(db, "users", currentUser.uid, "contacts", resolvedSequenceContactId))
+    : null;
+  const contact = contactSnapshot?.exists() ? { id: contactSnapshot.id, ...contactSnapshot.data() } : null;
+
   const next = events.find((entry) => (Number(entry.stepOrder) || 0) > (Number(current.stepOrder) || 0) && !entry.completed && entry.status !== "skipped");
   const completed = events.filter((entry) => entry.completed || entry.status === "skipped");
   const stepType = current.stepType === "task_reminder" ? "task_reminder" : "email";
@@ -4382,7 +4391,7 @@ async function renderSequenceEventDetail(eventId) {
     ariaLabel: "Sequence step progress",
     targetPaths: events.map((entry) => `#sequence-event/${entry.id}`),
   });
-  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div>${sequenceProgressMarkup}<div class="panel panel--sequence detail-grid feed-item--sequence"><p><strong>Sequence:</strong> ${escapeHtml(sequenceDisplayName || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
+  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div>${sequenceProgressMarkup}<div class="panel panel--sequence detail-grid feed-item--sequence"><p><strong>Sequence:</strong> ${escapeHtml(sequenceDisplayName || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p>${resolvedSequenceContactId ? `<p><strong>Contact:</strong> ${escapeHtml(contact?.name || contact?.email || "Selected contact")}</p>` : ""}</div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
 
   document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
     window.location.hash = originRoute || "#dashboard";
