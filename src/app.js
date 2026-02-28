@@ -385,6 +385,7 @@ function buildSubEventProgressMarkup({
   totalSubEvents = 1,
   currentIndex = 0,
   ariaLabel = "Progress",
+  targetPaths = [],
 } = {}) {
   const total = Math.max(1, Number.parseInt(totalSubEvents, 10) || 1);
   const boundedIndex = clampNumber(Number.parseInt(currentIndex, 10) || 0, 0, total - 1);
@@ -393,7 +394,11 @@ function buildSubEventProgressMarkup({
 
   const stepsMarkup = Array.from({ length: total }, (_, index) => {
     const nodeFilled = index < filledCount;
-    const node = `<span class="subevent-progress__node ${nodeFilled ? "is-filled" : ""}" style="--progress-order:${index};" aria-hidden="true"></span>`;
+    const targetPath = typeof targetPaths[index] === "string" ? targetPaths[index].trim() : "";
+    const interactiveAttributes = targetPath
+      ? `data-subevent-target="${escapeHtml(targetPath)}" tabindex="0" role="button" aria-label="${escapeHtml(`Open step ${index + 1}`)}"`
+      : 'aria-hidden="true"';
+    const node = `<span class="subevent-progress__node ${nodeFilled ? "is-filled" : ""} ${targetPath ? "subevent-progress__node--interactive" : ""}" style="--progress-order:${index};" data-subevent-index="${index}" ${interactiveAttributes}></span>`;
     if (index === total - 1) return node;
     const segmentFilled = index < filledCount - 1;
     const segment = `<span class="subevent-progress__segment ${segmentFilled ? "is-filled" : ""}" style="--progress-order:${index};" aria-hidden="true"></span>`;
@@ -401,6 +406,38 @@ function buildSubEventProgressMarkup({
   }).join("");
 
   return `<div class="subevent-progress" style="--subevent-progress-color:${color};--subevent-step-count:${total};" role="img" aria-label="${escapeHtml(`${ariaLabel}: ${filledCount} of ${total}`)}"><div class="subevent-progress__rail">${stepsMarkup}</div></div>`;
+}
+
+function attachSubEventProgressNavigation({
+  container = document,
+  originRoute = null,
+} = {}) {
+  container.querySelectorAll(".subevent-progress__node[data-subevent-target]").forEach((nodeEl) => {
+    const openTarget = () => {
+      const targetPath = String(nodeEl.dataset.subeventTarget || "").trim();
+      if (!targetPath) return;
+      window.location.hash = appendOriginToHash(targetPath, originRoute);
+    };
+
+    nodeEl.addEventListener("click", openTarget);
+    nodeEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openTarget();
+    });
+  });
+}
+
+function buildPromotionTouchpointEventPathByTouchpointId(events = []) {
+  return events.reduce((acc, entry) => {
+    if (!entry?.touchpointId || !entry?.id) return acc;
+    const hasPreferredEntry = acc.has(entry.touchpointId);
+    const isPreferredEntry = entry.type === "promotion_touchpoint" && !entry.leadId;
+    if (!hasPreferredEntry || isPreferredEntry) {
+      acc.set(entry.touchpointId, `#promotion-event/${entry.id}`);
+    }
+    return acc;
+  }, new Map());
 }
 
 function formatDateForSpreadsheet(value) {
@@ -1816,6 +1853,7 @@ async function renderTaskDetail(taskId) {
     totalSubEvents: 1,
     currentIndex: task.completed ? 0 : 0,
     ariaLabel: "Task progress",
+    targetPaths: [`#task/${taskId}`],
   });
 
   viewContainer.innerHTML = `
@@ -1853,6 +1891,11 @@ async function renderTaskDetail(taskId) {
 
   document.getElementById("edit-task-btn")?.addEventListener("click", () => {
     window.location.hash = appendOriginToHash(`#task/${taskId}/edit`, originRoute);
+  });
+
+  attachSubEventProgressNavigation({
+    container: viewContainer,
+    originRoute,
   });
 
   document.getElementById("task-note-form")?.addEventListener("submit", async (event) => {
@@ -1982,6 +2025,7 @@ async function renderLeadDetail(leadId) {
     totalSubEvents: stageList.length || 1,
     currentIndex: currentStageIndex,
     ariaLabel: "Lead stage progress",
+    targetPaths: (stageList.length ? stageList : [{ id: "stage" }]).map(() => `#lead/${leadId}`),
   });
   const pushOptionsMarkup = pushPresets
     .map(
@@ -2067,6 +2111,11 @@ async function renderLeadDetail(leadId) {
 
   document.getElementById("edit-lead-btn")?.addEventListener("click", () => {
     window.location.hash = appendOriginToHash(`#lead/${leadId}/edit`, originRoute);
+  });
+
+  attachSubEventProgressNavigation({
+    container: viewContainer,
+    originRoute,
   });
 
   document.getElementById("lead-note-form")?.addEventListener("submit", async (event) => {
@@ -2731,10 +2780,11 @@ async function renderPromotionEventDetail(eventId) {
     }
 
     const leadIds = Array.isArray(promotion.leadIds) ? promotion.leadIds : [];
-    const [leadsSnapshot, contactsSnapshot, statusesSnapshot] = await Promise.all([
+    const [leadsSnapshot, contactsSnapshot, statusesSnapshot, promotionEventsSnapshot] = await Promise.all([
       getDocs(collection(db, "users", currentUser.uid, "leads")),
       getDocs(collection(db, "users", currentUser.uid, "contacts")),
       getDocs(collection(db, "users", currentUser.uid, "promotions", event.promotionId, "touchpoints", event.touchpointId, "statuses")),
+      getDocs(query(collection(db, "users", currentUser.uid, "events"), where("promotionId", "==", event.promotionId))),
     ]);
 
     const leadsById = leadsSnapshot.docs.reduce((acc, leadDoc) => {
@@ -2752,12 +2802,15 @@ async function renderPromotionEventDetail(eventId) {
 
     const templateConfig = normalizePromotionTemplateConfig(touchpoint.templateConfig || touchpoint.template || event.templateConfig || {});
     const touchpoints = Array.isArray(promotion.touchpoints) ? promotion.touchpoints : [];
+    const promotionEvents = promotionEventsSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
+    const touchpointEventPathByTouchpointId = buildPromotionTouchpointEventPathByTouchpointId(promotionEvents);
     const touchpointIndex = Math.max(0, touchpoints.findIndex((entry) => entry.id === event.touchpointId));
     const promotionProgressMarkup = buildSubEventProgressMarkup({
       entityType: "promotion",
       totalSubEvents: touchpoints.length || 1,
       currentIndex: touchpointIndex,
       ariaLabel: "Promotion touchpoint progress",
+      targetPaths: touchpoints.map((entry) => touchpointEventPathByTouchpointId.get(entry.id) || ""),
     });
 
     const leadCards = leadIds.map((leadId) => {
@@ -2815,6 +2868,11 @@ async function renderPromotionEventDetail(eventId) {
 
     document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
       window.location.hash = originRoute || "#dashboard";
+    });
+
+    attachSubEventProgressNavigation({
+      container: viewContainer,
+      originRoute,
     });
 
     document.querySelectorAll("[data-promo-lead-card]").forEach((cardEl) => {
@@ -2885,6 +2943,7 @@ async function renderPromotionEventDetail(eventId) {
     totalSubEvents: 1,
     currentIndex: 0,
     ariaLabel: "Promotion touchpoint progress",
+    targetPaths: [`#promotion-event/${eventId}`],
   });
 
   viewContainer.innerHTML = `
@@ -2928,6 +2987,11 @@ async function renderPromotionEventDetail(eventId) {
     window.location.hash = originRoute || "#dashboard";
   });
 
+  attachSubEventProgressNavigation({
+    container: viewContainer,
+    originRoute,
+  });
+
   document.getElementById("promotion-done-btn")?.addEventListener("click", async () => {
     await markPromotionEventDone(eventId);
     window.location.hash = originRoute || "#dashboard";
@@ -2945,6 +3009,8 @@ async function renderPromotionEventDetail(eventId) {
 
 async function renderPromotionDetail(promotionId) {
   renderLoading("Loading promotion...");
+  const route = routeFromHash();
+  const originRoute = getCurrentRouteOrigin(route.params);
   const promotionRef = doc(db, "users", currentUser.uid, "promotions", promotionId);
   const promotionSnapshot = await getDoc(promotionRef);
   if (!promotionSnapshot.exists()) {
@@ -2982,6 +3048,8 @@ async function renderPromotionDetail(promotionId) {
     })
   );
 
+  const touchpointEventPathByTouchpointId = buildPromotionTouchpointEventPathByTouchpointId(events);
+
   const completedTouchpointCount = touchpoints.reduce((count, touchpoint) => {
     const touchpointStatuses = statusesByTouchpoint[touchpoint.id] || {};
     const statusList = Object.values(touchpointStatuses);
@@ -2994,6 +3062,7 @@ async function renderPromotionDetail(promotionId) {
     totalSubEvents: touchpoints.length || 1,
     currentIndex: Math.max(0, Math.min(touchpoints.length - 1, completedTouchpointCount)),
     ariaLabel: "Promotion progress",
+    targetPaths: touchpoints.map((touchpoint) => touchpointEventPathByTouchpointId.get(touchpoint.id) || ""),
   });
 
   const touchpointMarkup = touchpoints.map((touchpoint, index) => {
@@ -3049,6 +3118,11 @@ async function renderPromotionDetail(promotionId) {
   viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(promotion.name || "Promotion")}</h2><div class="view-header-actions"><button id="promotion-back-btn" type="button" class="secondary-btn">Back</button><button id="promotion-edit-btn" type="button" class="secondary-btn">Edit</button></div></div>${promotionProgressMarkup}<div class="panel detail-grid panel--promo-summary"><p><strong>End Date:</strong> ${formatDate(promotion.endDate)}</p><p><strong>Cohort Size:</strong> ${Array.isArray(promotion.leadIds) ? promotion.leadIds.length : 0}</p><p><strong>Status:</strong> ${escapeHtml(promotion.status || "active")}</p></div><div class="promotion-touchpoints-stack">${touchpointMarkup || '<p class="view-message">No touchpoints configured.</p>'}</div></section>`;
 
   document.getElementById("promotion-back-btn")?.addEventListener("click", () => { window.location.hash = "#promotions"; });
+
+  attachSubEventProgressNavigation({
+    container: viewContainer,
+    originRoute,
+  });
   document.getElementById("promotion-edit-btn")?.addEventListener("click", () => {
     window.location.hash = `#promotions?edit=${encodeURIComponent(promotion.id)}`;
   });
@@ -4302,6 +4376,7 @@ async function renderSequenceEventDetail(eventId) {
     totalSubEvents: events.length || 1,
     currentIndex: sequenceProgressIndex,
     ariaLabel: "Sequence step progress",
+    targetPaths: events.map((entry) => `#sequence-event/${entry.id}`),
   });
   viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div>${sequenceProgressMarkup}<div class="panel panel--sequence detail-grid feed-item--sequence"><p><strong>Sequence:</strong> ${escapeHtml(sequenceDisplayName || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
 
@@ -4311,6 +4386,11 @@ async function renderSequenceEventDetail(eventId) {
 
   document.getElementById("edit-sequence-step-btn")?.addEventListener("click", () => {
     window.location.hash = appendOriginToHash(`#sequence-event/${eventId}/edit`, originRoute || `#sequence-event/${eventId}`);
+  });
+
+  attachSubEventProgressNavigation({
+    container: viewContainer,
+    originRoute,
   });
 
   document.querySelectorAll("[data-sequence-open-mail]").forEach((buttonEl) => {
