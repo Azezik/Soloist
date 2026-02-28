@@ -369,6 +369,40 @@ function formatDate(value) {
   return date.toLocaleString();
 }
 
+const SUB_EVENT_PROGRESS_COLOR_BY_TYPE = {
+  lead: "var(--lead-border)",
+  sequence: "var(--sequence-border)",
+  promotion: "var(--promotion-border)",
+  task: "var(--task-border)",
+};
+
+function clampNumber(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function buildSubEventProgressMarkup({
+  entityType = "task",
+  totalSubEvents = 1,
+  currentIndex = 0,
+  ariaLabel = "Progress",
+} = {}) {
+  const total = Math.max(1, Number.parseInt(totalSubEvents, 10) || 1);
+  const boundedIndex = clampNumber(Number.parseInt(currentIndex, 10) || 0, 0, total - 1);
+  const filledCount = total === 1 ? (boundedIndex >= 0 ? 1 : 0) : boundedIndex + 1;
+  const color = SUB_EVENT_PROGRESS_COLOR_BY_TYPE[entityType] || "var(--crm-border)";
+
+  const stepsMarkup = Array.from({ length: total }, (_, index) => {
+    const nodeFilled = index < filledCount;
+    const node = `<span class="subevent-progress__node ${nodeFilled ? "is-filled" : ""}" style="--progress-order:${index};" aria-hidden="true"></span>`;
+    if (index === total - 1) return node;
+    const segmentFilled = index < filledCount - 1;
+    const segment = `<span class="subevent-progress__segment ${segmentFilled ? "is-filled" : ""}" style="--progress-order:${index};" aria-hidden="true"></span>`;
+    return `${node}${segment}`;
+  }).join("");
+
+  return `<div class="subevent-progress" style="--subevent-progress-color:${color};--subevent-step-count:${total};" role="img" aria-label="${escapeHtml(`${ariaLabel}: ${filledCount} of ${total}`)}"><div class="subevent-progress__rail">${stepsMarkup}</div></div>`;
+}
+
 function formatDateForSpreadsheet(value) {
   const date = toDate(value);
   if (!date) return "";
@@ -1777,6 +1811,12 @@ async function renderTaskDetail(taskId) {
   const taskNotes = taskNotesSnapshot.docs
     .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
     .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
+  const taskProgressMarkup = buildSubEventProgressMarkup({
+    entityType: "task",
+    totalSubEvents: 1,
+    currentIndex: task.completed ? 0 : 0,
+    ariaLabel: "Task progress",
+  });
 
   viewContainer.innerHTML = `
     <section class="crm-view crm-view--tasks">
@@ -1784,6 +1824,7 @@ async function renderTaskDetail(taskId) {
         <h2>${escapeHtml(task.title || "Task Detail")}</h2>
         <button id="edit-task-btn" type="button">Edit</button>
       </div>
+      ${taskProgressMarkup}
       <div class="panel panel--task detail-grid">
         <p><strong>Contact:</strong> ${escapeHtml(linkedContact?.name || "No contact")}</p>
         ${buildEmailDetailLine(task.email)}
@@ -1934,6 +1975,14 @@ async function renderLeadDetail(leadId) {
   const leadNotes = leadNotesSnapshot.docs
     .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
     .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
+  const stageList = Array.isArray(pipelineSettings?.stages) ? pipelineSettings.stages : [];
+  const currentStageIndex = Math.max(0, stageList.findIndex((stage) => stage.id === currentStage?.id));
+  const leadProgressMarkup = buildSubEventProgressMarkup({
+    entityType: "lead",
+    totalSubEvents: stageList.length || 1,
+    currentIndex: currentStageIndex,
+    ariaLabel: "Lead stage progress",
+  });
   const pushOptionsMarkup = pushPresets
     .map(
       (preset, index) =>
@@ -1951,6 +2000,7 @@ async function renderLeadDetail(leadId) {
           <button id="edit-lead-btn" type="button">Edit</button>
         </div>
       </div>
+      ${leadProgressMarkup}
       <div class="panel panel--lead detail-grid">
         <p><strong>Contact:</strong> ${escapeHtml(linkedContact?.name || "No contact")}</p>
         ${buildEmailDetailLine(linkedContact?.email || "")}
@@ -2701,6 +2751,14 @@ async function renderPromotionEventDetail(eventId) {
     }, {});
 
     const templateConfig = normalizePromotionTemplateConfig(touchpoint.templateConfig || touchpoint.template || event.templateConfig || {});
+    const touchpoints = Array.isArray(promotion.touchpoints) ? promotion.touchpoints : [];
+    const touchpointIndex = Math.max(0, touchpoints.findIndex((entry) => entry.id === event.touchpointId));
+    const promotionProgressMarkup = buildSubEventProgressMarkup({
+      entityType: "promotion",
+      totalSubEvents: touchpoints.length || 1,
+      currentIndex: touchpointIndex,
+      ariaLabel: "Promotion touchpoint progress",
+    });
 
     const leadCards = leadIds.map((leadId) => {
       const lead = leadsById[leadId] || {};
@@ -2733,6 +2791,7 @@ async function renderPromotionEventDetail(eventId) {
             <button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button>
           </div>
         </div>
+        ${promotionProgressMarkup}
         <div class="panel panel--sequence detail-grid feed-item--sequence">
           <p><strong>Promotion:</strong> ${escapeHtml(promotion.name || "Untitled promo")}</p>
           <p><strong>Touchpoint:</strong> ${escapeHtml(touchpoint.name || "Touchpoint")}</p>
@@ -2821,6 +2880,12 @@ async function renderPromotionEventDetail(eventId) {
   const templateConfig = normalizePromotionTemplateConfig(event.templateConfig || event.template || {});
   const mailBody = renderTemplateWithLead(templateConfig, contact?.name || "").trim();
   const mailTo = String(contact?.email || "").trim();
+  const promotionProgressMarkup = buildSubEventProgressMarkup({
+    entityType: "promotion",
+    totalSubEvents: 1,
+    currentIndex: 0,
+    ariaLabel: "Promotion touchpoint progress",
+  });
 
   viewContainer.innerHTML = `
     <section class="crm-view crm-view--leads">
@@ -2830,6 +2895,7 @@ async function renderPromotionEventDetail(eventId) {
           <button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button>
         </div>
       </div>
+      ${promotionProgressMarkup}
       <div class="panel panel--sequence detail-grid feed-item--sequence">
         <p><strong>Lead:</strong> ${escapeHtml(contact?.name || "Unnamed Contact")}</p>
         <p><strong>Promotion:</strong> ${escapeHtml(event.touchpointName || event.name || "Promotion touchpoint")}</p>
@@ -2916,6 +2982,20 @@ async function renderPromotionDetail(promotionId) {
     })
   );
 
+  const completedTouchpointCount = touchpoints.reduce((count, touchpoint) => {
+    const touchpointStatuses = statusesByTouchpoint[touchpoint.id] || {};
+    const statusList = Object.values(touchpointStatuses);
+    if (!statusList.length) return count;
+    const isDone = statusList.every((status) => status.completed === true || status.status === "completed" || status.status === "skipped");
+    return isDone ? count + 1 : count;
+  }, 0);
+  const promotionProgressMarkup = buildSubEventProgressMarkup({
+    entityType: "promotion",
+    totalSubEvents: touchpoints.length || 1,
+    currentIndex: Math.max(0, Math.min(touchpoints.length - 1, completedTouchpointCount)),
+    ariaLabel: "Promotion progress",
+  });
+
   const touchpointMarkup = touchpoints.map((touchpoint, index) => {
     const touchpointEvents = events
       .filter((event) => event.touchpointId === touchpoint.id)
@@ -2966,7 +3046,7 @@ async function renderPromotionDetail(promotionId) {
     return `<details class="panel" open><summary><strong>${escapeHtml(touchpoint.name || `Touchpoint ${index + 1}`)}</strong> · ${escapeHtml(`Touchpoint ${index + 1} of ${touchpoints.length}`)}</summary><p><strong>Due:</strong> ${formatDate(toPromotionDate(promotion.endDate) ? Timestamp.fromDate(new Date(toPromotionDate(promotion.endDate).getTime() - (Number(touchpoint.offsetDays) || 0) * 86400000)) : null)}</p><p><strong>Template Variables:</strong> ${variables.length ? escapeHtml(variables.join(", ")) : "None"}</p><label>Preview As… <select data-preview-touchpoint="${touchpoint.id}">${leadOptions.map((entry) => `<option value="${entry.event.leadId}">${escapeHtml(entry.name)}</option>`).join("")}</select></label><label class="full-width">Base Template Preview<textarea rows="5" readonly>${escapeHtml(renderTemplateWithLead(templateConfig, "").trim())}</textarea></label><label class="full-width">Preview Output<textarea rows="5" readonly data-preview-output="${touchpoint.id}">${escapeHtml(personalizedPreview)}</textarea></label><div class="table-wrap"><table><thead><tr><th>Lead</th><th>Product</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rowsMarkup}</tbody></table></div></details>`;
   }).join("");
 
-  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(promotion.name || "Promotion")}</h2><div class="view-header-actions"><button id="promotion-back-btn" type="button" class="secondary-btn">Back</button><button id="promotion-edit-btn" type="button" class="secondary-btn">Edit</button></div></div><div class="panel detail-grid panel--promo-summary"><p><strong>End Date:</strong> ${formatDate(promotion.endDate)}</p><p><strong>Cohort Size:</strong> ${Array.isArray(promotion.leadIds) ? promotion.leadIds.length : 0}</p><p><strong>Status:</strong> ${escapeHtml(promotion.status || "active")}</p></div><div class="promotion-touchpoints-stack">${touchpointMarkup || '<p class="view-message">No touchpoints configured.</p>'}</div></section>`;
+  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(promotion.name || "Promotion")}</h2><div class="view-header-actions"><button id="promotion-back-btn" type="button" class="secondary-btn">Back</button><button id="promotion-edit-btn" type="button" class="secondary-btn">Edit</button></div></div>${promotionProgressMarkup}<div class="panel detail-grid panel--promo-summary"><p><strong>End Date:</strong> ${formatDate(promotion.endDate)}</p><p><strong>Cohort Size:</strong> ${Array.isArray(promotion.leadIds) ? promotion.leadIds.length : 0}</p><p><strong>Status:</strong> ${escapeHtml(promotion.status || "active")}</p></div><div class="promotion-touchpoints-stack">${touchpointMarkup || '<p class="view-message">No touchpoints configured.</p>'}</div></section>`;
 
   document.getElementById("promotion-back-btn")?.addEventListener("click", () => { window.location.hash = "#promotions"; });
   document.getElementById("promotion-edit-btn")?.addEventListener("click", () => {
@@ -4216,7 +4296,14 @@ async function renderSequenceEventDetail(eventId) {
     : `<label class="full-width">Template Preview<textarea rows="5" readonly>${escapeHtml(mailPreview)}</textarea></label>`;
 
   const sequenceDisplayName = composeSequenceDisplayName(sequence);
-  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div><div class="panel panel--sequence detail-grid feed-item--sequence"><p><strong>Sequence:</strong> ${escapeHtml(sequenceDisplayName || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
+  const sequenceProgressIndex = Math.max(0, events.findIndex((entry) => entry.id === current.id));
+  const sequenceProgressMarkup = buildSubEventProgressMarkup({
+    entityType: "sequence",
+    totalSubEvents: events.length || 1,
+    currentIndex: sequenceProgressIndex,
+    ariaLabel: "Sequence step progress",
+  });
+  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div>${sequenceProgressMarkup}<div class="panel panel--sequence detail-grid feed-item--sequence"><p><strong>Sequence:</strong> ${escapeHtml(sequenceDisplayName || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
 
   document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
     window.location.hash = originRoute || "#dashboard";
