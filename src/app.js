@@ -2181,7 +2181,7 @@ async function renderLeadDetail(leadId) {
   const leadOpenMailBtn = document.getElementById("lead-open-mail-btn");
 
   function updateLeadTemplateOutput() {
-    const assembledTemplateText = renderTemplateWithLead(currentTemplate, linkedContact?.name || "");
+    const assembledTemplateText = renderTemplateWithLead(currentTemplate, linkedContact?.name || "", { ...lead, ...(linkedContact || {}) });
     const hasTemplateBody = currentTemplate.bodyText.trim().length > 0;
     const templateOutputText = hasTemplateBody ? assembledTemplateText : "";
 
@@ -2750,7 +2750,7 @@ function detectTemplateVariables(templateConfig = {}) {
   const text = [templateConfig.subjectText, templateConfig.introText, templateConfig.bodyText, templateConfig.outroText]
     .map((entry) => String(entry || ""))
     .join("\n");
-  const matches = text.match(/\{[^}]+\}|\[Name\]/g) || [];
+  const matches = text.match(/\{[^}]+\}|\[[^\]]+\]/g) || [];
   return [...new Set(matches)];
 }
 
@@ -2821,7 +2821,7 @@ async function renderPromotionEventDetail(eventId) {
       const lead = leadsById[leadId] || {};
       const contact = contactsById[lead.contactId] || {};
       const name = contact.name || lead.name || "Unnamed";
-      const mailBody = renderTemplateWithLead(templateConfig, name).trim();
+      const mailBody = renderTemplateWithLead(templateConfig, name, { ...lead, ...contact }).trim();
       const mailTo = String(contact.email || "").trim();
       const status = statusesByLeadId[leadId] || {};
       const isCompleted = status.completed || status.status === "completed" || status.status === "skipped";
@@ -2838,7 +2838,7 @@ async function renderPromotionEventDetail(eventId) {
     const previewLead = leadIds.map((leadId) => leadsById[leadId]).find(Boolean) || {};
     const previewContact = contactsById[previewLead.contactId] || {};
     const previewName = previewContact.name || previewLead.name || "";
-    const mailPreview = renderTemplateWithLead(templateConfig, previewName).trim();
+    const mailPreview = renderTemplateWithLead(templateConfig, previewName, { ...previewLead, ...previewContact }).trim();
 
     viewContainer.innerHTML = `
       <section class="crm-view crm-view--promotions">
@@ -2940,7 +2940,7 @@ async function renderPromotionEventDetail(eventId) {
   const contact = contactSnapshot?.exists?.() ? { id: contactSnapshot.id, ...contactSnapshot.data() } : null;
   const lead = leadSnapshot?.exists?.() ? { id: leadSnapshot.id, ...leadSnapshot.data() } : null;
   const templateConfig = normalizePromotionTemplateConfig(event.templateConfig || event.template || {});
-  const mailBody = renderTemplateWithLead(templateConfig, contact?.name || "").trim();
+  const mailBody = renderTemplateWithLead(templateConfig, contact?.name || "", { ...(lead || {}), ...(contact || {}) }).trim();
   const mailTo = String(contact?.email || "").trim();
   const promotionProgressMarkup = buildSubEventProgressMarkup({
     entityType: "promotion",
@@ -3105,7 +3105,7 @@ async function renderPromotionDetail(promotionId) {
 
     const rowsMarkup = leadOptions.length
       ? leadOptions.map(({ event, lead, contact, name }) => {
-        const mailBody = renderTemplateWithLead(templateConfig, name).trim();
+        const mailBody = renderTemplateWithLead(templateConfig, name, { ...lead, ...contact }).trim();
         const mailTo = String(contact.email || "").trim();
         const stateLabel = event.status === "skipped" ? "Skipped" : event.completed ? "Done" : "Open";
         return `<tr><td>${escapeHtml(name)}</td><td>${escapeHtml(lead.product || "-")}</td><td>${escapeHtml(stateLabel)}</td><td><div class="button-row"><button type="button" class="secondary-btn" data-promo-open-mail="${event.id}" ${mailTo ? `data-mail-to="${escapeHtml(mailTo)}"` : "disabled"} data-mail-subject="${escapeHtml(templateConfig.subjectText || "")}" data-mail-body="${escapeHtml(mailBody)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(mailBody)}">Copy</button><button type="button" class="secondary-btn" data-promo-touchpoint-done="${event.id}" ${event.completed || event.status === "skipped" ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-promo-touchpoint-skip="${event.id}" ${event.completed || event.status === "skipped" ? "disabled" : ""}>Skip</button></div></td></tr>`;
@@ -3114,7 +3114,7 @@ async function renderPromotionDetail(promotionId) {
 
     const previewLead = leadOptions.find((entry) => entry.event.leadId === previewLeadId) || leadOptions[0];
     const previewName = previewLead?.name || "";
-    const personalizedPreview = renderTemplateWithLead(templateConfig, previewName).trim();
+    const personalizedPreview = renderTemplateWithLead(templateConfig, previewName, { ...(previewLead?.lead || {}), ...(previewLead?.contact || {}) }).trim();
 
     return `<details class="panel" open><summary><strong>${escapeHtml(touchpoint.name || `Touchpoint ${index + 1}`)}</strong> · ${escapeHtml(`Touchpoint ${index + 1} of ${touchpoints.length}`)}</summary><p><strong>Due:</strong> ${formatDate(toPromotionDate(promotion.endDate) ? Timestamp.fromDate(new Date(toPromotionDate(promotion.endDate).getTime() - (Number(touchpoint.offsetDays) || 0) * 86400000)) : null)}</p><p><strong>Template Variables:</strong> ${variables.length ? escapeHtml(variables.join(", ")) : "None"}</p><label>Preview As… <select data-preview-touchpoint="${touchpoint.id}">${leadOptions.map((entry) => `<option value="${entry.event.leadId}">${escapeHtml(entry.name)}</option>`).join("")}</select></label><label class="full-width">Base Template Preview<textarea rows="5" readonly>${escapeHtml(renderTemplateWithLead(templateConfig, "").trim())}</textarea></label><label class="full-width">Preview Output<textarea rows="5" readonly data-preview-output="${touchpoint.id}">${escapeHtml(personalizedPreview)}</textarea></label><div class="table-wrap"><table><thead><tr><th>Lead</th><th>Product</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rowsMarkup}</tbody></table></div></details>`;
   }).join("");
@@ -3142,7 +3142,7 @@ async function renderPromotionDetail(promotionId) {
       const lead = leadsById[leadId] || {};
       const contact = contactsById[lead.contactId] || {};
       const outputEl = document.querySelector(`[data-preview-output="${touchpointId}"]`);
-      if (outputEl) outputEl.value = renderTemplateWithLead(templateConfig, contact.name || lead.name || "").trim();
+      if (outputEl) outputEl.value = renderTemplateWithLead(templateConfig, contact.name || lead.name || "", { ...lead, ...contact }).trim();
     });
   });
 
@@ -4353,11 +4353,11 @@ async function renderSequenceEventDetail(eventId) {
   const completed = events.filter((entry) => entry.completed || entry.status === "skipped");
   const stepType = current.stepType === "task_reminder" ? "task_reminder" : "email";
   const templateConfig = normalizePromotionTemplateConfig(current.templateConfig || current.template || {});
-  const mailPreview = renderTemplateWithLead(templateConfig, contact?.name || "").trim();
+  const mailPreview = renderTemplateWithLead(templateConfig, contact?.name || "", contact).trim();
   const renderStepCard = (entry, withActions = false) => {
     const entryType = entry.stepType === "task_reminder" ? "task_reminder" : "email";
     const cfg = normalizePromotionTemplateConfig(entry.templateConfig || entry.template || {});
-    const body = renderTemplateWithLead(cfg, contact?.name || "").trim();
+    const body = renderTemplateWithLead(cfg, contact?.name || "", contact).trim();
     const to = String(entry.useContactEmail ? (contact?.email || "") : (entry.toEmail || "")).trim();
     const stateLabel = entry.status === "skipped" ? "Skipped" : entry.completed ? "Done" : "Open";
     const actionMarkup = withActions
