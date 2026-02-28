@@ -545,6 +545,14 @@ button:active {
   flex: 0 0 auto;
 }
 
+.subevent-progress__node--interactive {
+  cursor: pointer;
+}
+
+.subevent-progress__node--interactive:hover {
+  opacity: 0.92;
+}
+
 .subevent-progress__segment {
   position: relative;
   flex: 1 1 auto;
