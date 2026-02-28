@@ -861,7 +861,9 @@ function routeFromHash() {
   }
 
   if (hash.startsWith("lead/")) {
-    return { page: "lead-detail", leadId: hash.split("/")[1], params };
+    const parts = hash.split("/");
+    const leadStageId = parts[2] === "stage" ? parts[3] || null : null;
+    return { page: "lead-detail", leadId: parts[1], leadStageId, params };
   }
 
   if (hash.startsWith("task/")) {
@@ -2010,22 +2012,24 @@ async function renderLeadDetail(leadId) {
     .map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }))
     .filter((contact) => isActiveRecord(contact));
   const linkedContact = contacts.find((contact) => contact.id === lead.contactId) || null;
+  const requestedStageId = String(route.leadStageId || "").trim();
   const currentStage = getStageById(pipelineSettings, lead.stageId) || pipelineSettings.stages[0] || null;
-  const stageTemplates = normalizeStageTemplates(currentStage || {});
+  const displayStage = getStageById(pipelineSettings, requestedStageId) || currentStage;
+  const stageTemplates = normalizeStageTemplates(displayStage || {});
   const selectedTemplate = stageTemplates[0] || normalizeStageTemplateEntry(DEFAULT_STAGE_TEMPLATE);
   const leadEmail = String(linkedContact?.email || "").trim();
-  const stageLabel = currentStage?.label || "Unknown stage";
+  const stageLabel = displayStage?.label || "Unknown stage";
   const leadNotes = leadNotesSnapshot.docs
     .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
     .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
   const stageList = Array.isArray(pipelineSettings?.stages) ? pipelineSettings.stages : [];
-  const currentStageIndex = Math.max(0, stageList.findIndex((stage) => stage.id === currentStage?.id));
+  const currentStageIndex = Math.max(0, stageList.findIndex((stage) => stage.id === displayStage?.id));
   const leadProgressMarkup = buildSubEventProgressMarkup({
     entityType: "lead",
     totalSubEvents: stageList.length || 1,
     currentIndex: currentStageIndex,
     ariaLabel: "Lead stage progress",
-    targetPaths: (stageList.length ? stageList : [{ id: "stage" }]).map(() => `#lead/${leadId}`),
+    targetPaths: (stageList.length ? stageList : [{ id: "stage" }]).map((stage) => `#lead/${leadId}/stage/${encodeURIComponent(stage.id || "stage")}`),
   });
   const pushOptionsMarkup = pushPresets
     .map(
