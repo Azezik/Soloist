@@ -583,6 +583,68 @@ button:active {
   to { transform: scale(1); opacity: 1; }
 }
 
+
+.subevent-timeline {
+  --subevent-progress-color: var(--crm-border);
+  margin: 0.2rem 0 1rem;
+}
+
+.subevent-timeline__scroller {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  cursor: grab;
+  padding: 0.3rem 0.2rem;
+}
+
+.subevent-timeline__scroller.is-dragging {
+  cursor: grabbing;
+}
+
+.subevent-timeline__rail {
+  width: max-content;
+  min-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.subevent-timeline__node {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid var(--subevent-progress-color);
+  background: transparent;
+  opacity: 0.4;
+  flex: 0 0 auto;
+  padding: 0;
+}
+
+.subevent-timeline__node.is-completed,
+.subevent-timeline__node.is-current {
+  background: var(--subevent-progress-color);
+  opacity: 1;
+}
+
+.subevent-timeline__node.is-current {
+  transform: scale(1.25);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--subevent-progress-color) 45%, transparent);
+}
+
+.subevent-timeline__segment {
+  width: clamp(2.5rem, 7vw, 5.25rem);
+  height: 2px;
+  background: rgba(255, 255, 255, 0.16);
+  flex: 0 0 auto;
+}
+
+.subevent-timeline__segment.is-completed {
+  background: var(--subevent-progress-color);
+}
+
+.promo-touchpoint-lead-card--focused {
+  border-color: color-mix(in oklab, var(--sequence-border) 70%, white);
+}
+
 .lead-state-switcher {
   display: inline-flex;
   border: 1px solid var(--crm-border);
