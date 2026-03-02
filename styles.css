@@ -1422,12 +1422,36 @@ select {
   text-align: center;
 }
 
-.lead-note-actions > * {
-  flex: 1 1 11rem;
+.lead-note-actions {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.8rem;
+}
+
+.lead-note-actions .button-row {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.lead-note-actions__save-row {
+  justify-content: flex-end;
+}
+
+.lead-note-actions__save-row > .dashboard-action-btn {
+  flex: 0 1 11rem;
+}
+
+.lead-note-actions__primary-row > * {
+  flex: 1;
 }
 
 @media (max-width: 520px) {
-  .lead-note-actions > * {
+  .lead-note-actions__save-row {
+    justify-content: stretch;
+  }
+
+  .lead-note-actions__save-row > .dashboard-action-btn {
     flex-basis: 100%;
   }
 }

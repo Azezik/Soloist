@@ -2171,16 +2171,17 @@ async function renderLeadDetail(leadId) {
           <label class="full-width">Add Note
             <textarea name="noteText" rows="3"></textarea>
           </label>
-          <div class="button-row full-width lead-note-actions">
-            <button type="submit">Save Note</button>
-            ${lead.contactId ? `<a href="${appendOriginToHash(`#contact/${encodeURIComponent(lead.contactId)}`, originRoute || `#lead/${leadId}`)}" class="timeline-link-pill">View contact activity</a>` : ""}
-            ${isActiveStageView ? `<button type="button" id="lead-done-stage-btn" class="secondary-btn">Done Stage</button>
+          <div class="full-width lead-note-actions">
+            <div class="button-row lead-note-actions__save-row">
+              <button type="submit" class="dashboard-action-btn">Save Note</button>
+            </div>
+            ${isActiveStageView ? `<div class="button-row lead-note-actions__primary-row"><button type="button" id="lead-done-stage-btn" class="dashboard-action-btn">Done Stage</button>
             <details class="push-menu">
-              <summary class="secondary-btn">Push</summary>
+              <summary class="dashboard-action-btn">Push</summary>
               <div class="push-dropdown" data-push-source="leads" data-push-entity="lead" data-push-id="${leadId}">
                 ${pushOptionsMarkup}
               </div>
-            </details>` : ""}
+            </details></div>` : ""}
           </div>
         </form>
       </div>
