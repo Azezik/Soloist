@@ -44,6 +44,36 @@ function normalizeSequenceSteps(rawSteps = []) {
     .sort((a, b) => a.order - b.order);
 }
 
+
+function buildTemplateIdempotencyKey({ name, steps }) {
+  const normalizedSteps = (steps || []).map((step) => ({
+    id: String(step?.id || ""),
+    order: Number(step?.order) || 0,
+    name: String(step?.name || ""),
+    delayDaysFromPrevious: Number(step?.delayDaysFromPrevious) || 0,
+    triggerImmediatelyAfterPrevious: step?.triggerImmediatelyAfterPrevious === true,
+    useContactEmail: step?.useContactEmail === true,
+    toEmail: String(step?.toEmail || ""),
+    stepType: step?.stepType === "task_reminder" ? "task_reminder" : "email",
+    taskConfig: {
+      title: String(step?.taskConfig?.title || ""),
+      notes: String(step?.taskConfig?.notes || ""),
+    },
+    templateConfig: {
+      subjectText: String(step?.templateConfig?.subjectText || ""),
+      introText: String(step?.templateConfig?.introText || ""),
+      populateName: step?.templateConfig?.populateName === true,
+      bodyText: String(step?.templateConfig?.bodyText || ""),
+      outroText: String(step?.templateConfig?.outroText || ""),
+    },
+  }));
+
+  return JSON.stringify({
+    name: String(name || "Untitled Sequence"),
+    steps: normalizedSteps,
+  });
+}
+
 function toSequenceDate(value) {
   if (!value) return null;
   if (typeof value?.toDate === "function") return value.toDate();
@@ -166,6 +196,7 @@ export async function createSequence({ db, userId, sequence, contactId = null, d
 export async function saveSequenceTemplate({ db, userId, sequence, templateId = null }) {
   const steps = normalizeSequenceSteps(sequence.steps || []);
   const templateName = clampString(sequence.name || "Untitled Sequence", 500);
+  const idempotencyKey = buildTemplateIdempotencyKey({ name: templateName, steps });
   const payload = {
     name: templateName,
     instanceName: null,
@@ -175,6 +206,7 @@ export async function saveSequenceTemplate({ db, userId, sequence, templateId = 
     contactId: null,
     isTemplate: true,
     status: "template",
+    idempotencyKey,
     updatedAt: serverTimestamp(),
     configSnapshot: {
       ...sequence,
@@ -183,12 +215,27 @@ export async function saveSequenceTemplate({ db, userId, sequence, templateId = 
       contactId: null,
       steps,
       isTemplate: true,
+      idempotencyKey,
     },
   };
 
   if (templateId) {
     await setDoc(doc(db, "users", userId, "sequences", templateId), payload, { merge: true });
     return templateId;
+  }
+
+  const existingTemplateSnapshot = await getDocs(query(
+    collection(db, "users", userId, "sequences"),
+    where("isTemplate", "==", true),
+    where("idempotencyKey", "==", idempotencyKey),
+  ));
+  const existingTemplate = existingTemplateSnapshot.docs[0];
+  if (existingTemplate) {
+    await setDoc(doc(db, "users", userId, "sequences", existingTemplate.id), {
+      ...payload,
+      createdAt: existingTemplate.data()?.createdAt || serverTimestamp(),
+    }, { merge: true });
+    return existingTemplate.id;
   }
 
   const templateRef = await addDoc(collection(db, "users", userId, "sequences"), {
