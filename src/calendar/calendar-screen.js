@@ -4,10 +4,8 @@ import {
   addDays,
   addMonths,
   addWeeks,
-  formatDayTitle,
   formatMonthTitle,
   formatTimeLabel,
-  formatWeekRangeTitle,
   fromDayKey,
   startOfDay,
   startOfMonth,
@@ -149,16 +147,19 @@ function getDraggedItem(state) {
   );
 }
 
-function renderCalendarHeader(state, title) {
+function renderCalendarHeader(state) {
+  const monthLabel = formatMonthTitle(state.focusedDate);
   return `
     <div class="view-header calendar-header">
-      <h2>Calendar</h2>
+      <div class="calendar-header-title">
+        <h2>Calendar</h2>
+        <p class="calendar-period-title">${escapeHtml(monthLabel)}</p>
+      </div>
       <div class="calendar-toolbar">
         <div class="calendar-nav-controls">
           <button type="button" data-cal-nav="prev" aria-label="Go previous period">←</button>
           <button type="button" data-cal-today="true">Today</button>
           <button type="button" data-cal-nav="next" aria-label="Go next period">→</button>
-          <p class="calendar-period-title">${escapeHtml(title)}</p>
         </div>
         <div class="calendar-view-switcher" role="tablist" aria-label="Calendar view switcher">
           <button type="button" data-cal-view="month" class="${state.view === VIEW_MONTH ? "is-active" : ""}">Month</button>
@@ -252,7 +253,7 @@ function renderMonthView(state) {
 
   state.viewContainer.innerHTML = `
     <section class="crm-view crm-view--calendar">
-      ${renderCalendarHeader(state, formatMonthTitle(monthDate))}
+      ${renderCalendarHeader(state)}
       <div class="calendar-weekdays">${WEEKDAY_LABELS.map((label) => `<span>${label}</span>`).join("")}</div>
       <div class="calendar-month-grid">${gridMarkup}</div>
     </section>
@@ -389,7 +390,7 @@ function renderWeekView(state) {
 
   state.viewContainer.innerHTML = `
     <section class="crm-view crm-view--calendar">
-      ${renderCalendarHeader(state, formatWeekRangeTitle(weekDays[0].date))}
+      ${renderCalendarHeader(state)}
       <section class="calendar-week-grid panel">
         <div class="calendar-week-top-left">All-day</div>
         ${headerDays}
@@ -487,7 +488,7 @@ function renderDayView(state) {
 
   state.viewContainer.innerHTML = `
     <section class="crm-view crm-view--calendar">
-      ${renderCalendarHeader(state, formatDayTitle(selectedDate))}
+      ${renderCalendarHeader(state)}
 
       <section class="calendar-allday-panel panel">
         <h3>All-day / No time</h3>
