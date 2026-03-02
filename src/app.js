@@ -2091,7 +2091,7 @@ async function renderLeadDetail(leadId) {
           <label class="full-width">Add Note
             <textarea name="noteText" rows="3"></textarea>
           </label>
-          <div class="button-row full-width">
+          <div class="button-row full-width lead-note-actions">
             <button type="submit">Save Note</button>
             ${lead.contactId ? `<a href="#contact/${encodeURIComponent(lead.contactId)}" class="timeline-link-pill">View contact activity</a>` : ""}
             ${isActiveStageView ? `<button type="button" id="lead-done-stage-btn" class="secondary-btn">Done Stage</button>
