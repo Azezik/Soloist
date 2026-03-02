@@ -1301,7 +1301,23 @@ select {
 }
 
 .crm-view--calendar .calendar-header {
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.crm-view--calendar,
+.crm-view--calendar > * {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.calendar-header-title {
+  min-width: 0;
+}
+
+.calendar-header-title .calendar-period-title {
+  margin-top: 0.3rem;
 }
 
 .calendar-controls {
@@ -1590,18 +1606,22 @@ select {
   gap: 0.8rem;
   width: 100%;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .calendar-nav-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
+  min-width: 0;
 }
 
 .calendar-period-title {
   margin: 0;
-  min-width: 190px;
   font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .calendar-view-switcher {
