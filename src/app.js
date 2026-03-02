@@ -3,6 +3,7 @@ import {
   db,
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -42,6 +43,7 @@ import { composeSequenceDisplayName, createSequence, markSequenceStepStatus, sav
 import {
   DEFAULT_STAGE_TEMPLATE,
   LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER,
+  applyContactPlaceholders,
   buildStageTemplateSettingsMarkup,
   buildTemplateId,
   normalizePromotionTemplateConfig,
@@ -4211,6 +4213,24 @@ function applySequenceStepContactRules(step, index, selectedContact = null) {
   toInput.classList.toggle("sequence-contact-email-value", useContactEmail);
 }
 
+function renderSequenceStepEmailTemplate(templateConfig = {}, contact = null, useContactEmail = false) {
+  const normalizedTemplate = normalizePromotionTemplateConfig(templateConfig || {});
+  if (!useContactEmail) {
+    const rawParts = [normalizedTemplate.introText, normalizedTemplate.bodyText, normalizedTemplate.outroText]
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean);
+    return {
+      subject: String(normalizedTemplate.subjectText || ""),
+      body: rawParts.length ? `${rawParts.join("\n\n")}\n` : "",
+    };
+  }
+
+  return {
+    subject: applyContactPlaceholders(normalizedTemplate.subjectText || "", contact),
+    body: renderTemplateWithLead(normalizedTemplate, contact?.name || "", contact),
+  };
+}
+
 async function renderSequenceCreateFlow() {
   renderLoading("Loading sequences...");
   const [appSettings, sequencesSnapshot, contactsSnapshot] = await Promise.all([
@@ -4245,7 +4265,7 @@ async function renderSequenceCreateFlow() {
 
   const render = () => {
     if (state.page === "select") {
-      const templateRows = existing.map((entry) => `<article class="panel feed-item"><h3>${escapeHtml(entry.name || "Untitled Sequence")}</h3><p>${Array.isArray(entry.steps) ? entry.steps.length : 0} steps</p><div class="button-row"><button type="button" data-select-sequence-template="${entry.id}">Start</button><button type="button" class="secondary-btn" data-edit-sequence-template="${entry.id}">Edit</button></div></article>`).join("");
+      const templateRows = existing.map((entry) => `<article class="panel feed-item"><h3>${escapeHtml(entry.name || "Untitled Sequence")}</h3><p>${Array.isArray(entry.steps) ? entry.steps.length : 0} steps</p><div class="button-row"><button type="button" class="secondary-btn danger-btn" data-delete-sequence-template="${entry.id}">Delete</button><button type="button" class="secondary-btn" data-edit-sequence-template="${entry.id}">Edit</button><button type="button" data-select-sequence-template="${entry.id}">Start</button></div></article>`).join("");
       const options = existing.length
         ? `<div class="feed-list">${templateRows}</div><div class="button-row"><button type="button" id="configure-sequence-btn">Create Template</button></div>`
         : '<div class="button-row"><button type="button" id="configure-sequence-btn">Create Template</button></div>';
@@ -4290,6 +4310,16 @@ async function renderSequenceCreateFlow() {
           state.editingTemplateId = selected?.id || null;
           state.page = "steps";
           render();
+        });
+      });
+      document.querySelectorAll("[data-delete-sequence-template]").forEach((buttonEl) => {
+        buttonEl.addEventListener("click", async () => {
+          const templateId = String(buttonEl.dataset.deleteSequenceTemplate || "").trim();
+          if (!templateId) return;
+          if (!window.confirm("Are you sure you want to delete this template?")) return;
+
+          await deleteDoc(doc(db, "users", currentUser.uid, "sequences", templateId));
+          await renderSequenceCreateFlow();
         });
       });
       return;
@@ -4443,15 +4473,18 @@ async function renderSequenceEventDetail(eventId) {
   const completed = events.filter((entry) => entry.completed || entry.status === "skipped");
   const stepType = current.stepType === "task_reminder" ? "task_reminder" : "email";
   const templateConfig = normalizePromotionTemplateConfig(current.templateConfig || current.template || {});
-  const mailPreview = renderTemplateWithLead(templateConfig, contact?.name || "", contact).trim();
+  const currentRenderedTemplate = renderSequenceStepEmailTemplate(templateConfig, contact, current.useContactEmail === true);
+  const mailPreview = currentRenderedTemplate.body.trim();
   const renderStepCard = (entry, withActions = false) => {
     const entryType = entry.stepType === "task_reminder" ? "task_reminder" : "email";
     const cfg = normalizePromotionTemplateConfig(entry.templateConfig || entry.template || {});
-    const body = renderTemplateWithLead(cfg, contact?.name || "", contact).trim();
+    const renderedTemplate = renderSequenceStepEmailTemplate(cfg, contact, entry.useContactEmail === true);
+    const body = renderedTemplate.body.trim();
+    const subject = renderedTemplate.subject.trim();
     const to = String(entry.useContactEmail ? (contact?.email || "") : (entry.toEmail || "")).trim();
     const stateLabel = entry.status === "skipped" ? "Skipped" : entry.completed ? "Done" : "Open";
     const actionMarkup = withActions
-      ? `<div class="promo-touchpoint-lead-actions">${entryType === "email" ? `<div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-open-mail="${entry.id}" ${to ? `data-mail-to="${escapeHtml(to)}"` : "disabled"} data-mail-subject="${escapeHtml(cfg.subjectText || "")}" data-mail-body="${escapeHtml(body)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(body)}">Copy</button></div><div class="promo-touchpoint-action-divider" aria-hidden="true"></div>` : ""}<div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-step-done="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-sequence-step-skip="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Skip</button></div></div>`
+      ? `<div class="promo-touchpoint-lead-actions">${entryType === "email" ? `<div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-open-mail="${entry.id}" ${to ? `data-mail-to="${escapeHtml(to)}"` : "disabled"} data-mail-subject="${escapeHtml(subject)}" data-mail-body="${escapeHtml(body)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(body)}">Copy</button></div><div class="promo-touchpoint-action-divider" aria-hidden="true"></div>` : ""}<div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-step-done="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-sequence-step-skip="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Skip</button></div></div>`
       : "";
     const descriptionText = String(entry?.taskConfig?.notes || entry?.taskNotes || "").trim();
     const reminderContent = entryType === "task_reminder"
