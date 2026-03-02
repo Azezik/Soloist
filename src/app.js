@@ -305,6 +305,22 @@ function escapeHtml(value = "") {
     .replaceAll("'", "&#39;");
 }
 
+function renderContactSubCard({ contactId, displayName, email = "", phone = "", originRoute = "", className = "" } = {}) {
+  const normalizedContactId = String(contactId || "").trim();
+  const normalizedName = String(displayName || "").trim() || "Unnamed Contact";
+  const details = [String(email || "").trim(), String(phone || "").trim()].filter((value) => value);
+  const secondaryLineMarkup = details.length
+    ? `<p class="contact-sub-card__details">${escapeHtml(details.join(" · "))}</p>`
+    : "";
+  const sharedClasses = `contact-sub-card ${className}`.trim();
+
+  if (!normalizedContactId) {
+    return `<div class="${sharedClasses}"><p class="contact-sub-card__name">${escapeHtml(normalizedName)}</p>${secondaryLineMarkup}</div>`;
+  }
+
+  return `<a href="${appendOriginToHash(`#contact/${encodeURIComponent(normalizedContactId)}`, originRoute)}" class="${sharedClasses}" aria-label="Open ${escapeHtml(normalizedName)} contact"><p class="contact-sub-card__name">${escapeHtml(normalizedName)}</p>${secondaryLineMarkup}</a>`;
+}
+
 function readCredentials() {
   const email = emailEl.value.trim();
   const password = passwordEl.value;
@@ -2029,6 +2045,13 @@ async function renderLeadDetail(leadId) {
   const stageTemplates = normalizeStageTemplates(displayStage || {});
   const selectedTemplate = stageTemplates[0] || normalizeStageTemplateEntry(DEFAULT_STAGE_TEMPLATE);
   const leadEmail = String(linkedContact?.email || "").trim();
+  const leadContactSubCardMarkup = renderContactSubCard({
+    contactId: linkedContact?.id || lead.contactId,
+    displayName: linkedContact?.name || "No contact",
+    email: linkedContact?.email || "",
+    phone: linkedContact?.phone || "",
+    originRoute,
+  });
   const stageLabel = displayStage?.label || "Unknown stage";
   const leadNotes = leadNotesSnapshot.docs
     .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
@@ -2070,8 +2093,7 @@ async function renderLeadDetail(leadId) {
       </div>
       ${leadProgressMarkup}
       <div class="panel panel--lead stage-status-card">
-        <h3>${escapeHtml(linkedContact?.name || "No contact")}</h3>
-        <p class="stage-status-card__subline">${escapeHtml([linkedContact?.email || "No email", linkedContact?.phone || "No phone"].join(" · "))}</p>
+        ${leadContactSubCardMarkup}
         <div class="stage-status-card__meta">
           <p><strong>Viewing Stage:</strong> ${escapeHtml(stageLabel)} <span class="stage-state-pill stage-state-pill--${stageViewState}">${escapeHtml(stageStateLabel)}</span></p>
           <p><strong>Current Stage:</strong> ${escapeHtml(currentStage?.label || "-")}</p>
@@ -2984,6 +3006,13 @@ async function renderPromotionEventDetail(eventId) {
   const contact = contactSnapshot?.exists?.() ? { id: contactSnapshot.id, ...contactSnapshot.data() } : null;
   const lead = leadSnapshot?.exists?.() ? { id: leadSnapshot.id, ...leadSnapshot.data() } : null;
   const templateConfig = normalizePromotionTemplateConfig(event.templateConfig || event.template || {});
+  const promotionContactSubCardMarkup = renderContactSubCard({
+    contactId: contact?.id || event.contactId,
+    displayName: contact?.name || contact?.email || "Unnamed Contact",
+    email: contact?.email || "",
+    phone: contact?.phone || "",
+    originRoute,
+  });
   const mailBody = renderTemplateWithLead(templateConfig, contact?.name || "", { ...(lead || {}), ...(contact || {}) }).trim();
   const mailTo = String(contact?.email || "").trim();
   const promotionProgressMarkup = buildSubEventProgressMarkup({
@@ -3004,7 +3033,7 @@ async function renderPromotionEventDetail(eventId) {
       </div>
       ${promotionProgressMarkup}
       <div class="panel panel--sequence detail-grid feed-item--sequence">
-        <p><strong>Lead:</strong> ${escapeHtml(contact?.name || "Unnamed Contact")}</p>
+        ${promotionContactSubCardMarkup}
         <p><strong>Promotion:</strong> ${escapeHtml(event.touchpointName || event.name || "Promotion touchpoint")}</p>
         <p><strong>Due:</strong> ${formatDate(event.scheduledFor)}</p>
       </div>
@@ -4459,7 +4488,14 @@ async function renderSequenceEventDetail(eventId) {
     ariaLabel: "Sequence step progress",
     targetPaths: events.map((entry) => `#sequence-event/${entry.id}`),
   });
-  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div>${sequenceProgressMarkup}<div class="panel panel--sequence stage-status-card feed-item--sequence"><h3>${escapeHtml(contact?.name || contact?.email || "Selected contact")}</h3><p class="stage-status-card__subline">${escapeHtml(sequenceDisplayName || "Untitled sequence")}</p><div class="stage-status-card__meta"><p><strong>Viewing Stage:</strong> ${escapeHtml(current.stepName || "Step")} <span class="stage-state-pill stage-state-pill--${sequenceStageViewState}">${escapeHtml(sequenceStageLabel)}</span></p><p><strong>Current Stage:</strong> ${escapeHtml(events[activeSequenceIndex]?.stepName || "-")}</p><p><strong>Status:</strong> ${escapeHtml(current.status || (current.completed ? "completed" : "open"))}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Viewing</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, sequenceStageViewState === "active")}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
+  const sequenceContactSubCardMarkup = renderContactSubCard({
+    contactId: contact?.id || resolvedSequenceContactId,
+    displayName: contact?.name || contact?.email || "Selected contact",
+    email: contact?.email || "",
+    phone: contact?.phone || "",
+    originRoute,
+  });
+  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div>${sequenceProgressMarkup}<div class="panel panel--sequence stage-status-card feed-item--sequence">${sequenceContactSubCardMarkup}<div class="stage-status-card__meta"><p><strong>Viewing Stage:</strong> ${escapeHtml(current.stepName || "Step")} <span class="stage-state-pill stage-state-pill--${sequenceStageViewState}">${escapeHtml(sequenceStageLabel)}</span></p><p><strong>Current Stage:</strong> ${escapeHtml(events[activeSequenceIndex]?.stepName || "-")}</p><p><strong>Status:</strong> ${escapeHtml(current.status || (current.completed ? "completed" : "open"))}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Viewing</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, sequenceStageViewState === "active")}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
 
   document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
     window.location.hash = originRoute || "#dashboard";
