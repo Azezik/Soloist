@@ -920,13 +920,48 @@ function getCurrentRouteOrigin(params) {
   return decodeURIComponent(params?.get("from") || "").trim() || null;
 }
 
+function normalizeHashRoute(hashRoute) {
+  const normalized = String(hashRoute || "").trim();
+  if (!normalized) return null;
+  return normalized.startsWith("#") ? normalized : `#${normalized}`;
+}
+
 function appendOriginToHash(path, originRoute) {
   if (!originRoute) return path;
   return `${path}?from=${encodeURIComponent(originRoute)}`;
 }
 
+function getPreviousHashRoute() {
+  const previous = window.sessionStorage.getItem("soloist.previousHashRoute");
+  return normalizeHashRoute(previous);
+}
+
+function rememberHashRouteTransition() {
+  const currentHashRoute = normalizeHashRoute(window.location.hash) || "#dashboard";
+  const lastHashRoute = normalizeHashRoute(window.sessionStorage.getItem("soloist.currentHashRoute"));
+  if (lastHashRoute && lastHashRoute !== currentHashRoute) {
+    window.sessionStorage.setItem("soloist.previousHashRoute", lastHashRoute);
+  }
+  window.sessionStorage.setItem("soloist.currentHashRoute", currentHashRoute);
+}
+
+function dismissExpandedView(originRoute, fallbackRoute = "#dashboard") {
+  const normalizedOriginRoute = normalizeHashRoute(originRoute);
+  const normalizedFallbackRoute = normalizeHashRoute(fallbackRoute) || "#dashboard";
+  const previousHashRoute = getPreviousHashRoute();
+
+  if (normalizedOriginRoute && previousHashRoute === normalizedOriginRoute) {
+    window.history.back();
+    return;
+  }
+
+  const destinationRoute = normalizedOriginRoute || normalizedFallbackRoute;
+  if (normalizeHashRoute(window.location.hash) === destinationRoute) return;
+  window.location.replace(destinationRoute);
+}
+
 function navigateAfterDelete(originRoute, fallbackRoute) {
-  window.location.hash = originRoute || fallbackRoute;
+  dismissExpandedView(originRoute, fallbackRoute);
 }
 
 function renderLoading(text = "Loading...") {
@@ -2126,7 +2161,7 @@ async function renderLeadDetail(leadId) {
           </label>
           <div class="button-row full-width lead-note-actions">
             <button type="submit">Save Note</button>
-            ${lead.contactId ? `<a href="#contact/${encodeURIComponent(lead.contactId)}" class="timeline-link-pill">View contact activity</a>` : ""}
+            ${lead.contactId ? `<a href="${appendOriginToHash(`#contact/${encodeURIComponent(lead.contactId)}`, originRoute || `#lead/${leadId}`)}" class="timeline-link-pill">View contact activity</a>` : ""}
             ${isActiveStageView ? `<button type="button" id="lead-done-stage-btn" class="secondary-btn">Done Stage</button>
             <details class="push-menu">
               <summary class="secondary-btn">Push</summary>
@@ -2948,7 +2983,7 @@ async function renderPromotionEventDetail(eventId) {
     `;
 
     document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
-      window.location.hash = originRoute || "#dashboard";
+      dismissExpandedView(originRoute, "#dashboard");
     });
 
     attachSubEventProgressNavigation({
@@ -3065,14 +3100,14 @@ async function renderPromotionEventDetail(eventId) {
         <div class="button-row full-width">
           <button id="promotion-open-mail-btn" type="button" ${mailTo ? `data-mail-to="${escapeHtml(mailTo)}"` : "disabled"} data-mail-subject="${escapeHtml(templateConfig.subjectText || "")}" data-mail-body="${escapeHtml(mailBody)}">Open in mail</button>
           <button id="promotion-done-btn" type="button" class="secondary-btn">Done</button>
-          ${lead ? `<a href="#lead/${encodeURIComponent(lead.id)}" class="timeline-link-pill">Open lead</a>` : ""}
+          ${lead ? `<a href="${appendOriginToHash(`#lead/${encodeURIComponent(lead.id)}`, originRoute || `#promotion-event/${eventId}`)}" class="timeline-link-pill">Open lead</a>` : ""}
         </div>
       </div>
     </section>
   `;
 
   document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
-    window.location.hash = originRoute || "#dashboard";
+    dismissExpandedView(originRoute, "#dashboard");
   });
 
   attachSubEventProgressNavigation({
@@ -3082,7 +3117,7 @@ async function renderPromotionEventDetail(eventId) {
 
   document.getElementById("promotion-done-btn")?.addEventListener("click", async () => {
     await markPromotionEventDone(eventId);
-    window.location.hash = originRoute || "#dashboard";
+    dismissExpandedView(originRoute, "#dashboard");
   });
 
   document.getElementById("promotion-open-mail-btn")?.addEventListener("click", () => {
@@ -4427,7 +4462,7 @@ async function renderSequenceEventDetail(eventId) {
   viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div>${sequenceProgressMarkup}<div class="panel panel--sequence stage-status-card feed-item--sequence">${sequenceContactSubCardMarkup}<div class="stage-status-card__meta"><p><strong>Viewing Stage:</strong> ${escapeHtml(current.stepName || "Step")} <span class="stage-state-pill stage-state-pill--${sequenceStageViewState}">${escapeHtml(sequenceStageLabel)}</span></p><p><strong>Current Stage:</strong> ${escapeHtml(events[activeSequenceIndex]?.stepName || "-")}</p><p><strong>Status:</strong> ${escapeHtml(current.status || (current.completed ? "completed" : "open"))}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Viewing</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, sequenceStageViewState === "active")}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
 
   document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
-    window.location.hash = originRoute || "#dashboard";
+    dismissExpandedView(originRoute, "#dashboard");
   });
 
   document.getElementById("edit-sequence-step-btn")?.addEventListener("click", () => {
@@ -4470,7 +4505,7 @@ async function renderSequenceEventDetail(eventId) {
       if (!target) return;
       await markSequenceStepStatus({ db, userId: currentUser.uid, event: target, status: "completed" });
       await reconcile();
-      window.location.hash = originRoute || "#dashboard";
+      dismissExpandedView(originRoute, "#dashboard");
     });
   });
 
@@ -4738,8 +4773,10 @@ onAuthStateChanged(auth, async (user) => {
 });
 
 initAuthPageAnimations();
+rememberHashRouteTransition();
 
 window.addEventListener("hashchange", () => {
   if (!authStateResolved) return;
+  rememberHashRouteTransition();
   renderCurrentRoute();
 });
