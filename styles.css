@@ -545,6 +545,26 @@ button:active {
   flex: 0 0 auto;
 }
 
+.subevent-progress__node--completed {
+  background: var(--subevent-progress-color);
+}
+
+.subevent-progress__node--active {
+  background: var(--subevent-progress-color);
+  transform: scale(1.14);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--subevent-progress-color) 25%, transparent);
+}
+
+.subevent-progress__node--future {
+  background: transparent;
+  opacity: 0.64;
+}
+
+.subevent-progress__node--viewing {
+  outline: 2px solid rgba(255, 255, 255, 0.8);
+  outline-offset: 2px;
+}
+
 .subevent-progress__node--interactive {
   cursor: pointer;
 }
@@ -575,8 +595,8 @@ button:active {
   animation-delay: calc(var(--progress-order, 0) * 55ms);
 }
 
-.subevent-progress__node.is-filled {
-  background: var(--subevent-progress-color);
+.subevent-progress__node--completed,
+.subevent-progress__node--active {
   animation: subevent-progress-node 220ms ease-out both;
   animation-delay: calc(var(--progress-order, 0) * 55ms);
 }
@@ -919,6 +939,56 @@ select {
 
 .panel--promo-summary {
   gap: 0.65rem;
+}
+
+.stage-status-card {
+  padding: 0.7rem 0.85rem;
+  display: grid;
+  gap: 0.38rem;
+}
+
+.stage-status-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.stage-status-card__subline {
+  margin: 0;
+  opacity: 0.8;
+  font-size: 0.9rem;
+}
+
+.stage-status-card__meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.3rem 0.75rem;
+  border-top: 1px solid var(--crm-divider);
+  padding-top: 0.46rem;
+}
+
+.stage-status-card__meta p {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.stage-state-pill {
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.38rem;
+  border: 1px solid var(--crm-border);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+}
+
+.stage-state-pill--active {
+  border-color: rgba(85, 234, 115, 0.65);
+}
+
+.stage-state-pill--completed {
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+.stage-state-pill--future {
+  opacity: 0.82;
 }
 
 .promotion-config-panel {
