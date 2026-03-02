@@ -380,32 +380,43 @@ function clampNumber(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function resolveProgressStageState({ viewIndex = 0, activeIndex = 0, total = 1 } = {}) {
+  const boundedTotal = Math.max(1, Number.parseInt(total, 10) || 1);
+  const boundedViewIndex = clampNumber(Number.parseInt(viewIndex, 10) || 0, 0, boundedTotal - 1);
+  const boundedActiveIndex = clampNumber(Number.parseInt(activeIndex, 10) || 0, 0, boundedTotal - 1);
+  if (boundedViewIndex === boundedActiveIndex) return "active";
+  if (boundedViewIndex < boundedActiveIndex) return "completed";
+  return "future";
+}
+
 function buildSubEventProgressMarkup({
   entityType = "task",
   totalSubEvents = 1,
   currentIndex = 0,
+  activeIndex = currentIndex,
   ariaLabel = "Progress",
   targetPaths = [],
 } = {}) {
   const total = Math.max(1, Number.parseInt(totalSubEvents, 10) || 1);
-  const boundedIndex = clampNumber(Number.parseInt(currentIndex, 10) || 0, 0, total - 1);
-  const filledCount = total === 1 ? (boundedIndex >= 0 ? 1 : 0) : boundedIndex + 1;
+  const boundedViewIndex = clampNumber(Number.parseInt(currentIndex, 10) || 0, 0, total - 1);
+  const boundedActiveIndex = clampNumber(Number.parseInt(activeIndex, 10) || 0, 0, total - 1);
+  const filledCount = total === 1 ? 1 : boundedActiveIndex + 1;
   const color = SUB_EVENT_PROGRESS_COLOR_BY_TYPE[entityType] || "var(--crm-border)";
 
   const stepsMarkup = Array.from({ length: total }, (_, index) => {
-    const nodeFilled = index < filledCount;
+    const stageState = resolveProgressStageState({ viewIndex: index, activeIndex: boundedActiveIndex, total });
     const targetPath = typeof targetPaths[index] === "string" ? targetPaths[index].trim() : "";
     const interactiveAttributes = targetPath
       ? `data-subevent-target="${escapeHtml(targetPath)}" tabindex="0" role="button" aria-label="${escapeHtml(`Open step ${index + 1}`)}"`
       : 'aria-hidden="true"';
-    const node = `<span class="subevent-progress__node ${nodeFilled ? "is-filled" : ""} ${targetPath ? "subevent-progress__node--interactive" : ""}" style="--progress-order:${index};" data-subevent-index="${index}" ${interactiveAttributes}></span>`;
+    const node = `<span class="subevent-progress__node subevent-progress__node--${stageState} ${targetPath ? "subevent-progress__node--interactive" : ""} ${boundedViewIndex === index ? "subevent-progress__node--viewing" : ""}" style="--progress-order:${index};" data-subevent-index="${index}" ${interactiveAttributes}></span>`;
     if (index === total - 1) return node;
     const segmentFilled = index < filledCount - 1;
     const segment = `<span class="subevent-progress__segment ${segmentFilled ? "is-filled" : ""}" style="--progress-order:${index};" aria-hidden="true"></span>`;
     return `${node}${segment}`;
   }).join("");
 
-  return `<div class="subevent-progress" style="--subevent-progress-color:${color};--subevent-step-count:${total};" role="img" aria-label="${escapeHtml(`${ariaLabel}: ${filledCount} of ${total}`)}"><div class="subevent-progress__rail">${stepsMarkup}</div></div>`;
+  return `<div class="subevent-progress" style="--subevent-progress-color:${color};--subevent-step-count:${total};" role="img" aria-label="${escapeHtml(`${ariaLabel}: viewing ${boundedViewIndex + 1} of ${total}, active ${boundedActiveIndex + 1}`)}"><div class="subevent-progress__rail">${stepsMarkup}</div></div>`;
 }
 
 function attachSubEventProgressNavigation({
@@ -2023,11 +2034,20 @@ async function renderLeadDetail(leadId) {
     .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
     .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
   const stageList = Array.isArray(pipelineSettings?.stages) ? pipelineSettings.stages : [];
-  const currentStageIndex = Math.max(0, stageList.findIndex((stage) => stage.id === displayStage?.id));
+  const viewedStageIndex = Math.max(0, stageList.findIndex((stage) => stage.id === displayStage?.id));
+  const activeStageIndex = Math.max(0, stageList.findIndex((stage) => stage.id === lead.stageId));
+  const stageViewState = resolveProgressStageState({
+    viewIndex: viewedStageIndex,
+    activeIndex: activeStageIndex,
+    total: stageList.length || 1,
+  });
+  const isActiveStageView = stageViewState === "active";
+  const stageStateLabel = stageViewState === "completed" ? "Completed" : (stageViewState === "future" ? "Upcoming" : "Active");
   const leadProgressMarkup = buildSubEventProgressMarkup({
     entityType: "lead",
     totalSubEvents: stageList.length || 1,
-    currentIndex: currentStageIndex,
+    currentIndex: viewedStageIndex,
+    activeIndex: activeStageIndex,
     ariaLabel: "Lead stage progress",
     targetPaths: (stageList.length ? stageList : [{ id: "stage" }]).map((stage) => `#lead/${leadId}/stage/${encodeURIComponent(stage.id || "stage")}`),
   });
@@ -2049,15 +2069,16 @@ async function renderLeadDetail(leadId) {
         </div>
       </div>
       ${leadProgressMarkup}
-      <div class="panel panel--lead detail-grid">
-        <p><strong>Contact:</strong> ${escapeHtml(linkedContact?.name || "No contact")}</p>
-        ${buildEmailDetailLine(linkedContact?.email || "")}
-        <p><strong>Phone:</strong> ${escapeHtml(linkedContact?.phone || "-")}</p>
-        <p><strong>Stage:</strong> ${escapeHtml(getStageById(pipelineSettings, lead.stageId)?.label || lead.stageId || "-")}</p>
-        <p><strong>Status:</strong> ${escapeHtml(lead.stageStatus || lead.status || "pending")}</p>
-        <p><strong>Next Action:</strong> ${lead.nextActionAt ? formatDate(lead.nextActionAt) : "-"}</p>
-        <p><strong>Created:</strong> ${formatDate(lead.createdAt)}</p>
-        <p><strong>Updated:</strong> ${formatDate(lead.updatedAt)}</p>
+      <div class="panel panel--lead stage-status-card">
+        <h3>${escapeHtml(linkedContact?.name || "No contact")}</h3>
+        <p class="stage-status-card__subline">${escapeHtml([linkedContact?.email || "No email", linkedContact?.phone || "No phone"].join(" · "))}</p>
+        <div class="stage-status-card__meta">
+          <p><strong>Viewing Stage:</strong> ${escapeHtml(stageLabel)} <span class="stage-state-pill stage-state-pill--${stageViewState}">${escapeHtml(stageStateLabel)}</span></p>
+          <p><strong>Current Stage:</strong> ${escapeHtml(currentStage?.label || "-")}</p>
+          <p><strong>Status:</strong> ${escapeHtml(lead.stageStatus || lead.status || "pending")}</p>
+          ${stageViewState === "completed" ? `<p><strong>Completion Date:</strong> ${formatDate(lead.completedAt || lead.updatedAt)}</p>` : ""}
+          ${stageViewState === "active" ? `<p><strong>Next Action:</strong> ${lead.nextActionAt ? formatDate(lead.nextActionAt) : "-"}</p>` : ""}
+        </div>
       </div>
 
       <div class="panel panel--lead notes-panel">
@@ -2073,13 +2094,13 @@ async function renderLeadDetail(leadId) {
           <div class="button-row full-width">
             <button type="submit">Save Note</button>
             ${lead.contactId ? `<a href="#contact/${encodeURIComponent(lead.contactId)}" class="timeline-link-pill">View contact activity</a>` : ""}
-            <button type="button" id="lead-done-stage-btn" class="secondary-btn">Done Stage</button>
+            ${isActiveStageView ? `<button type="button" id="lead-done-stage-btn" class="secondary-btn">Done Stage</button>
             <details class="push-menu">
               <summary class="secondary-btn">Push</summary>
               <div class="push-dropdown" data-push-source="leads" data-push-entity="lead" data-push-id="${leadId}">
                 ${pushOptionsMarkup}
               </div>
-            </details>
+            </details>` : ""}
           </div>
         </form>
       </div>
@@ -2100,14 +2121,14 @@ async function renderLeadDetail(leadId) {
           <textarea id="lead-template-output" rows="8" readonly class="lead-template-output" placeholder="${escapeHtml(LEAD_TEMPLATE_EMPTY_BODY_PLACEHOLDER)}"></textarea>
         </label>
         <div class="button-row full-width">
-          <button
+          ${isActiveStageView ? `<button
             type="button"
             id="lead-open-mail-btn"
             ${leadEmail ? `data-mail-to="${escapeHtml(leadEmail)}"` : "disabled"}
           >
             Open in mail
           </button>
-          <button type="button" id="lead-copy-template-btn">Copy template</button>
+          <button type="button" id="lead-copy-template-btn">Copy template</button>` : ""}
         </div>
       </div>
     </section>
@@ -2809,10 +2830,25 @@ async function renderPromotionEventDetail(eventId) {
     const promotionEvents = promotionEventsSnapshot.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
     const touchpointEventPathByTouchpointId = buildPromotionTouchpointEventPathByTouchpointId(promotionEvents);
     const touchpointIndex = Math.max(0, touchpoints.findIndex((entry) => entry.id === event.touchpointId));
+    const activeTouchpointIndex = (() => {
+      const firstOpenIndex = touchpoints.findIndex((entry) => {
+        const containerEvent = promotionEvents.find((promotionEvent) => promotionEvent.touchpointId === entry.id && promotionEvent.type === "promotion_touchpoint" && !promotionEvent.leadId);
+        return !(containerEvent?.completed || containerEvent?.status === "completed" || containerEvent?.status === "skipped");
+      });
+      if (firstOpenIndex >= 0) return firstOpenIndex;
+      return Math.max(0, touchpoints.length - 1);
+    })();
+    const touchpointViewState = resolveProgressStageState({
+      viewIndex: touchpointIndex,
+      activeIndex: activeTouchpointIndex,
+      total: touchpoints.length || 1,
+    });
+    const touchpointStateLabel = touchpointViewState === "completed" ? "Completed" : (touchpointViewState === "future" ? "Upcoming" : "Active");
     const promotionProgressMarkup = buildSubEventProgressMarkup({
       entityType: "promotion",
       totalSubEvents: touchpoints.length || 1,
       currentIndex: touchpointIndex,
+      activeIndex: activeTouchpointIndex,
       ariaLabel: "Promotion touchpoint progress",
       targetPaths: touchpoints.map((entry) => touchpointEventPathByTouchpointId.get(entry.id) || ""),
     });
@@ -2827,9 +2863,12 @@ async function renderPromotionEventDetail(eventId) {
       const isCompleted = status.completed || status.status === "completed" || status.status === "skipped";
       const stateLabel = status.status === "skipped" ? "Skipped" : isCompleted ? "Done" : "Open";
       const headerLine = lead.product ? `${name} • ${lead.product}` : name;
+      const actionMarkup = touchpointViewState === "active"
+        ? `<div class="promo-touchpoint-lead-actions" aria-label="Lead actions"><div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-promo-open-mail="${leadId}" ${mailTo ? `data-mail-to="${escapeHtml(mailTo)}"` : "disabled"} data-mail-subject="${escapeHtml(templateConfig.subjectText || "")}" data-mail-body="${escapeHtml(mailBody)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(mailBody)}">Copy</button></div><div class="promo-touchpoint-action-divider" aria-hidden="true"></div><div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-promo-touchpoint-done="${leadId}" ${isCompleted ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-promo-touchpoint-skip="${leadId}" ${isCompleted ? "disabled" : ""}>Skip</button></div></div>`
+        : "";
       return {
         isCompleted,
-        markup: `<article class="promo-touchpoint-lead-card panel panel--lead ${isCompleted ? "promo-touchpoint-lead-card--completed" : ""}" ${lead.id ? `data-promo-lead-card="${escapeHtml(lead.id)}" tabindex="0" role="button"` : ""}><div class="promo-touchpoint-lead-meta"><p class="promo-touchpoint-lead-name">${escapeHtml(headerLine)}</p><p class="promo-touchpoint-lead-status">Status: ${escapeHtml(stateLabel)}</p></div><div class="promo-touchpoint-lead-actions" aria-label="Lead actions"><div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-promo-open-mail="${leadId}" ${mailTo ? `data-mail-to="${escapeHtml(mailTo)}"` : "disabled"} data-mail-subject="${escapeHtml(templateConfig.subjectText || "")}" data-mail-body="${escapeHtml(mailBody)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(mailBody)}">Copy</button></div><div class="promo-touchpoint-action-divider" aria-hidden="true"></div><div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-promo-touchpoint-done="${leadId}" ${isCompleted ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-promo-touchpoint-skip="${leadId}" ${isCompleted ? "disabled" : ""}>Skip</button></div></div></article>`
+        markup: `<article class="promo-touchpoint-lead-card panel panel--lead ${isCompleted ? "promo-touchpoint-lead-card--completed" : ""}" ${lead.id ? `data-promo-lead-card="${escapeHtml(lead.id)}" tabindex="0" role="button"` : ""}><div class="promo-touchpoint-lead-meta"><p class="promo-touchpoint-lead-name">${escapeHtml(headerLine)}</p><p class="promo-touchpoint-lead-status">Status: ${escapeHtml(stateLabel)}</p></div>${actionMarkup}</article>`
       };
     });
 
@@ -2850,10 +2889,14 @@ async function renderPromotionEventDetail(eventId) {
           </div>
         </div>
         ${promotionProgressMarkup}
-        <div class="panel panel--sequence detail-grid feed-item--sequence">
-          <p><strong>Promotion:</strong> ${escapeHtml(promotion.name || "Untitled promo")}</p>
-          <p><strong>Touchpoint:</strong> ${escapeHtml(touchpoint.name || "Touchpoint")}</p>
-          <p><strong>Due:</strong> ${formatDate(event.scheduledFor)}</p>
+        <div class="panel panel--sequence stage-status-card feed-item--sequence">
+          <h3>${escapeHtml(promotion.name || "Untitled promo")}</h3>
+          <p class="stage-status-card__subline">${escapeHtml(touchpoint.name || "Touchpoint")}</p>
+          <div class="stage-status-card__meta">
+            <p><strong>Viewing Stage:</strong> ${escapeHtml(touchpoint.name || "Touchpoint")} <span class="stage-state-pill stage-state-pill--${touchpointViewState}">${escapeHtml(touchpointStateLabel)}</span></p>
+            <p><strong>Current Stage:</strong> ${escapeHtml(touchpoints[activeTouchpointIndex]?.name || "-")}</p>
+            <p><strong>Due:</strong> ${formatDate(event.scheduledFor)}</p>
+          </div>
         </div>
         <div class="panel panel--lead notes-panel">
           <label class="full-width">Template Preview<textarea rows="5" readonly>${escapeHtml(mailPreview)}</textarea></label>
@@ -4385,14 +4428,26 @@ async function renderSequenceEventDetail(eventId) {
 
   const sequenceDisplayName = composeSequenceDisplayName(sequence);
   const sequenceProgressIndex = Math.max(0, events.findIndex((entry) => entry.id === current.id));
+  const activeSequenceIndex = (() => {
+    const unresolvedIndex = events.findIndex((entry) => !entry.completed && entry.status !== "skipped");
+    if (unresolvedIndex >= 0) return unresolvedIndex;
+    return Math.max(0, events.length - 1);
+  })();
+  const sequenceStageViewState = resolveProgressStageState({
+    viewIndex: sequenceProgressIndex,
+    activeIndex: activeSequenceIndex,
+    total: events.length || 1,
+  });
+  const sequenceStageLabel = sequenceStageViewState === "completed" ? "Completed" : (sequenceStageViewState === "future" ? "Upcoming" : "Active");
   const sequenceProgressMarkup = buildSubEventProgressMarkup({
     entityType: "sequence",
     totalSubEvents: events.length || 1,
     currentIndex: sequenceProgressIndex,
+    activeIndex: activeSequenceIndex,
     ariaLabel: "Sequence step progress",
     targetPaths: events.map((entry) => `#sequence-event/${entry.id}`),
   });
-  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div>${sequenceProgressMarkup}<div class="panel panel--sequence detail-grid feed-item--sequence"><p><strong>Sequence:</strong> ${escapeHtml(sequenceDisplayName || "Untitled sequence")}</p><p><strong>Step:</strong> ${escapeHtml(current.stepName || "Step")}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p>${resolvedSequenceContactId ? `<p><strong>Contact:</strong> ${escapeHtml(contact?.name || contact?.email || "Selected contact")}</p>` : ""}</div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Active</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, true)}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
+  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div>${sequenceProgressMarkup}<div class="panel panel--sequence stage-status-card feed-item--sequence"><h3>${escapeHtml(contact?.name || contact?.email || "Selected contact")}</h3><p class="stage-status-card__subline">${escapeHtml(sequenceDisplayName || "Untitled sequence")}</p><div class="stage-status-card__meta"><p><strong>Viewing Stage:</strong> ${escapeHtml(current.stepName || "Step")} <span class="stage-state-pill stage-state-pill--${sequenceStageViewState}">${escapeHtml(sequenceStageLabel)}</span></p><p><strong>Current Stage:</strong> ${escapeHtml(events[activeSequenceIndex]?.stepName || "-")}</p><p><strong>Status:</strong> ${escapeHtml(current.status || (current.completed ? "completed" : "open"))}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Viewing</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, sequenceStageViewState === "active")}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
 
   document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
     window.location.hash = originRoute || "#dashboard";
