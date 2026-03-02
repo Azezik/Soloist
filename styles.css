@@ -523,6 +523,16 @@ button:active {
   overflow-wrap: anywhere;
 }
 
+.view-header--lead-detail h2 {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.view-header--lead-detail .view-header-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .view-header-actions {
   display: flex;
   gap: 0.75rem;
@@ -1269,6 +1279,44 @@ select {
 
 .push-menu summary.secondary-btn:hover {
   background-color: #1d1d1d;
+}
+
+.push-menu--close-actions {
+  flex: 0 0 auto;
+}
+
+.push-menu--close-actions summary {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  background-color: #f0f0f0;
+  color: #121212;
+  padding: 0.75rem 1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.push-menu--close-actions summary:hover {
+  background-color: #ffffff;
+}
+
+@media (max-width: 680px) {
+  .view-header--lead-detail {
+    align-items: center;
+  }
+
+  .view-header--lead-detail .view-header-actions {
+    gap: 0.55rem;
+  }
+
+  .view-header--lead-detail button,
+  .view-header--lead-detail .push-menu--close-actions summary {
+    min-height: 42px;
+    padding: 0.6rem 0.85rem;
+    white-space: nowrap;
+  }
 }
 
 .push-menu summary::-webkit-details-marker {

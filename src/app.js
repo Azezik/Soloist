@@ -1349,6 +1349,7 @@ function parseLeadFormValues(formEl) {
     stageId: String(formData.get("stageId") || "").trim(),
     product: String(formData.get("product") || "").trim(),
     stageStatus: String(formData.get("stageStatus") || "pending").trim() || "pending",
+    leadState: getLeadState({ state: String(formData.get("leadState") || "open").trim() || "open" }),
     initialNote: String(formData.get("initialNote") || "").trim(),
   };
 }
@@ -1401,6 +1402,12 @@ function renderLeadForm({ mode, pipelineSettings, contacts, values, onSubmit, on
             ${["pending", "completed"].map((status) => `<option value="${status}" ${values.stageStatus === status ? "selected" : ""}>${status}</option>`).join("")}
           </select>
         </label>
+
+        ${mode === "edit" ? `<label>Lead State
+          <select name="leadState">
+            ${LEAD_STATE_FILTERS.map((stateOption) => `<option value="${stateOption.value}" ${getLeadState(values) === stateOption.value ? "selected" : ""}>${escapeHtml(stateOption.label)}</option>`).join("")}
+          </select>
+        </label>` : ""}
 
 
         <label class="full-width">Initial Note (Optional)
@@ -2129,11 +2136,16 @@ async function renderLeadDetail(leadId) {
 
   viewContainer.innerHTML = `
     <section class="crm-view crm-view--leads">
-      <div class="view-header">
+      <div class="view-header view-header--lead-detail">
         <h2>Lead</h2>
         <div class="view-header-actions">
-          <button type="button" id="lead-close-won-btn" class="secondary-btn">Close — Won</button>
-          <button type="button" id="lead-close-lost-btn" class="secondary-btn">Close — Lost</button>
+          <details class="push-menu push-menu--close-actions">
+            <summary id="lead-close-menu-btn">Close</summary>
+            <div class="push-dropdown">
+              <button type="button" id="lead-close-won-btn" class="push-option">Close Won</button>
+              <button type="button" id="lead-close-lost-btn" class="push-option">Close Lost</button>
+            </div>
+          </details>
           <button id="edit-lead-btn" type="button">Edit</button>
         </div>
       </div>
@@ -2382,18 +2394,21 @@ async function renderEditLeadForm(leadId) {
       }
 
       const computedNextActionAt = computeInitialLeadNextActionAt(pipelineSettings, values.stageId, new Date());
+      const selectedLeadState = getLeadState({ state: values.leadState || lead.state });
+      const isClosedState = selectedLeadState !== "open";
 
       await updateDoc(leadRef, {
         ...buildTimelineEventFields("lead", {
           contactId: lead.contactId || null,
-          status: values.stageStatus || "pending",
-          archived: values.stageStatus === "completed",
+          status: isClosedState ? "closed" : "open",
+          archived: isClosedState,
         }),
         title: values.contactName || lead.title || "Lead",
         stageId: values.stageId,
         product: values.product || "",
-        stageStatus: values.stageStatus || "pending",
-        nextActionAt: computedNextActionAt,
+        stageStatus: isClosedState ? "completed" : (values.stageStatus || "pending"),
+        state: selectedLeadState,
+        nextActionAt: isClosedState ? null : (lead.nextActionAt || computedNextActionAt),
         updatedAt: serverTimestamp(),
       });
       window.location.hash = leadDetailRoute;
