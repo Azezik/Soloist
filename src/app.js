@@ -4223,6 +4223,8 @@ async function renderSequenceCreateFlow() {
     steps: [buildSequenceStepState({}, 0)],
     editingTemplateId: null,
     bannerMessage: initialBannerMessage,
+    isSavingTemplate: false,
+    templateSaveError: "",
   };
 
   const render = () => {
@@ -4309,7 +4311,9 @@ async function renderSequenceCreateFlow() {
 
     if (state.page === "steps") {
       const selectedContact = contacts.find((entry) => entry.id === state.contactId) || null;
-      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(state.editingTemplateId ? "Edit Template" : "Create Template")}</h2></div><div class="panel detail-grid"><label>Template Name<input id="sequence-name-input" value="${escapeHtml(state.sequenceName || state.selectedTemplate?.name || "")}" placeholder="Untitled Sequence" /></label></div><div class="promotion-wizard-message-list">${state.steps.map((step, index) => buildSequenceStepMarkup(step, index)).join("")}</div><div class="button-row"><button id="sequence-add-step-btn" type="button" class="secondary-btn">Add Sequence Step</button><button id="sequence-steps-prev-btn" type="button" class="secondary-btn">Back</button><button id="sequence-create-btn" type="button">Save Template</button></div></section>`;
+      const saveLabel = state.isSavingTemplate ? "Saving..." : "Save Template";
+      const saveErrorMarkup = state.templateSaveError ? `<div class="panel"><p><strong>${escapeHtml(state.templateSaveError)}</strong></p></div>` : "";
+      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(state.editingTemplateId ? "Edit Template" : "Create Template")}</h2></div>${saveErrorMarkup}<div class="panel detail-grid"><label>Template Name<input id="sequence-name-input" value="${escapeHtml(state.sequenceName || state.selectedTemplate?.name || "")}" placeholder="Untitled Sequence" /></label></div><div class="promotion-wizard-message-list">${state.steps.map((step, index) => buildSequenceStepMarkup(step, index)).join("")}</div><div class="button-row"><button id="sequence-add-step-btn" type="button" class="secondary-btn" ${state.isSavingTemplate ? "disabled" : ""}>Add Sequence Step</button><button id="sequence-steps-prev-btn" type="button" class="secondary-btn" ${state.isSavingTemplate ? "disabled" : ""}>Back</button><button id="sequence-create-btn" type="button" ${state.isSavingTemplate ? "disabled" : ""}>${saveLabel}</button></div></section>`;
 
       state.steps.forEach((step, index) => {
         applySequenceStepTypeRules(index);
@@ -4348,16 +4352,29 @@ async function renderSequenceCreateFlow() {
         render();
       });
       document.getElementById("sequence-create-btn")?.addEventListener("click", async () => {
+        if (state.isSavingTemplate) return;
+        state.templateSaveError = "";
+        state.isSavingTemplate = true;
+        render();
         state.sequenceName = document.getElementById("sequence-name-input")?.value || state.sequenceName || "";
         state.steps = syncSequenceStepsFromForm(state.steps).map((entry, index) => ({ ...entry, order: index, name: entry.name || `Step ${index + 1}` }));
         const payload = {
           name: state.sequenceName || state.selectedTemplate?.name || "Untitled Sequence",
           steps: state.steps,
         };
-        await saveSequenceTemplate({ db, userId: currentUser.uid, sequence: payload, templateId: state.editingTemplateId || null });
-        const bannerMessage = state.editingTemplateId ? "Template updated. Select it to start." : "New sequence template saved. Select it to start.";
-        window.sessionStorage.setItem("sequence-template-banner", bannerMessage);
-        window.location.hash = "#sequences/new";
+        try {
+          await saveSequenceTemplate({ db, userId: currentUser.uid, sequence: payload, templateId: state.editingTemplateId || null });
+          const bannerMessage = state.editingTemplateId ? "Template updated. Select it to start." : "New sequence template saved. Select it to start.";
+          window.sessionStorage.setItem("sequence-template-banner", bannerMessage);
+          state.page = "select";
+          state.isSavingTemplate = false;
+          render();
+        } catch (error) {
+          console.error("Failed to save template", error);
+          state.templateSaveError = "Unable to save template. Please try again.";
+          state.isSavingTemplate = false;
+          render();
+        }
       });
     }
   };

@@ -1116,6 +1116,23 @@ select {
 .promotion-wizard-message-card {
   gap: 0.5rem;
   padding: 1rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.promotion-wizard-message-list {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.promotion-wizard-message-card label,
+.promotion-wizard-message-card input,
+.promotion-wizard-message-card select,
+.promotion-wizard-message-card textarea,
+.promotion-wizard-message-card > div {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .promotion-lead-list-item {
@@ -1451,11 +1468,17 @@ select {
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .sequence-offset-row span {
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.sequence-offset-row .promotion-wizard-offset-input {
+  flex: 0 1 72px;
 }
 
 .sequence-readonly-input {
