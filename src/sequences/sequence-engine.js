@@ -163,6 +163,41 @@ export async function createSequence({ db, userId, sequence, contactId = null, d
   return sequenceRef.id;
 }
 
+export async function saveSequenceTemplate({ db, userId, sequence, templateId = null }) {
+  const steps = normalizeSequenceSteps(sequence.steps || []);
+  const templateName = clampString(sequence.name || "Untitled Sequence", 500);
+  const payload = {
+    name: templateName,
+    instanceName: null,
+    displayName: templateName,
+    startDate: null,
+    steps,
+    contactId: null,
+    isTemplate: true,
+    status: "template",
+    updatedAt: serverTimestamp(),
+    configSnapshot: {
+      ...sequence,
+      instanceName: null,
+      startDate: null,
+      contactId: null,
+      steps,
+      isTemplate: true,
+    },
+  };
+
+  if (templateId) {
+    await setDoc(doc(db, "users", userId, "sequences", templateId), payload, { merge: true });
+    return templateId;
+  }
+
+  const templateRef = await addDoc(collection(db, "users", userId, "sequences"), {
+    ...payload,
+    createdAt: serverTimestamp(),
+  });
+  return templateRef.id;
+}
+
 export async function markSequenceStepStatus({ db, userId, event, status }) {
   if (!event?.sequenceId || !event?.stepId) return;
   const eventRef = doc(db, "users", userId, "events", event.id);
