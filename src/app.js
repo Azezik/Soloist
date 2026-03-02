@@ -1874,6 +1874,16 @@ async function renderTaskDetail(taskId) {
     .map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }))
     .filter((contact) => isActiveRecord(contact));
   const linkedContact = contacts.find((contact) => contact.id === task.contactId) || null;
+  const taskContactMarkup = linkedContact
+    ? renderContactSubCard({
+      contactId: linkedContact.id,
+      displayName: linkedContact.name || "Unnamed Contact",
+      email: linkedContact.email || "",
+      phone: linkedContact.phone || "",
+      originRoute,
+      className: "contact-sub-card--task",
+    })
+    : `<div class="contact-sub-card contact-sub-card--placeholder contact-sub-card--task"><p class="contact-sub-card__name">No contact linked</p><p class="contact-sub-card__details">Link a contact from Edit if needed.</p></div>`;
   const taskNotes = taskNotesSnapshot.docs
     .map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() }))
     .sort((a, b) => (toDate(a.createdAt)?.getTime() || 0) - (toDate(b.createdAt)?.getTime() || 0));
@@ -1892,13 +1902,14 @@ async function renderTaskDetail(taskId) {
         <button id="edit-task-btn" type="button">Edit</button>
       </div>
       ${taskProgressMarkup}
-      <div class="panel panel--task detail-grid">
-        <p><strong>Contact:</strong> ${escapeHtml(linkedContact?.name || "No contact")}</p>
-        ${buildEmailDetailLine(task.email)}
+      ${taskContactMarkup}
+      <div class="panel panel--task stage-status-card">
+        <div class="stage-status-card__meta stage-status-card__meta--task">
         <p><strong>Scheduled:</strong> ${task.scheduledFor ? formatDate(task.scheduledFor) : "No schedule"}</p>
         <p><strong>Status:</strong> ${task.completed ? "Completed" : "Active"}</p>
         <p><strong>Created:</strong> ${formatDate(task.createdAt)}</p>
         <p><strong>Updated:</strong> ${formatDate(task.updatedAt)}</p>
+        </div>
       </div>
       <div class="panel panel--task notes-panel">
         <h3>Task Notes</h3>

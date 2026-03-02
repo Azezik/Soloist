@@ -519,6 +519,8 @@ button:active {
 .view-header h2 {
   margin: 0;
   line-height: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .view-header-actions {
@@ -1010,6 +1012,35 @@ select {
 .stage-status-card__meta p {
   margin: 0;
   font-size: 0.88rem;
+}
+
+
+.contact-sub-card--task {
+  margin-bottom: 0.4rem;
+}
+
+.contact-sub-card--placeholder {
+  background: #101010;
+  border-style: dashed;
+}
+
+.contact-sub-card--placeholder .contact-sub-card__name {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.contact-sub-card--placeholder .contact-sub-card__details {
+  opacity: 0.68;
+}
+
+.stage-status-card__meta--task {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 680px) {
+  .stage-status-card__meta--task {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .stage-state-pill {
