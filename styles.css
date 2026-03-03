@@ -1130,6 +1130,27 @@ select {
   min-width: 0;
 }
 
+.sequence-step-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sequence-step-card-header .promotion-wizard-card-title {
+  margin: 0;
+}
+
+[data-sequence-drag-handle] {
+  width: auto;
+  min-height: 32px;
+  padding: 0.25rem 0.6rem;
+  cursor: grab;
+}
+
+.promotion-wizard-message-card[draggable="true"] {
+  touch-action: pan-y;
+}
+
 .promotion-wizard-message-list {
   display: grid;
   gap: 1rem;

@@ -4112,13 +4112,16 @@ async function renderSettingsPage() {
 
 function buildSequenceStepState(step = {}, index = 0) {
   const template = normalizePromotionTemplateConfig(step.templateConfig || step.template || {});
-  const triggerImmediatelyAfterPrevious = index > 0 && step.triggerImmediatelyAfterPrevious === true;
-  const stepType = step.stepType === "task_reminder" ? "task_reminder" : "email";
+  const triggerImmediatelyAfterPrevious = index > 0
+    ? (step.triggerImmediatelyAfterPrevious !== false)
+    : false;
+  const hasEmailContent = Boolean(step.toEmail || step.useContactEmail || template.subjectText || template.introText || template.bodyText || template.outroText);
+  const stepType = step.stepType === "task_reminder" ? "task_reminder" : ((step.stepType === "email" || hasEmailContent) ? "email" : "task_reminder");
   return {
     id: String(step.id || `step-${index + 1}`),
     order: index,
     name: String(step.name || `Step ${index + 1}`),
-    delayDaysFromPrevious: index === 0 ? 0 : (triggerImmediatelyAfterPrevious ? 0 : Math.max(0, Number(step.delayDaysFromPrevious) || 0)),
+    delayDaysFromPrevious: index === 0 ? 0 : Math.max(0, Number(step.delayDaysFromPrevious) || 0),
     triggerImmediatelyAfterPrevious,
     useContactEmail: step.useContactEmail === true,
     toEmail: String(step.toEmail || ""),
@@ -4137,21 +4140,21 @@ function buildSequenceStepState(step = {}, index = 0) {
 function syncSequenceStepsFromForm(steps = []) {
   return steps.map((step, index) => {
     const stepTypeValue = document.querySelector(`[data-sequence-step-type="${index}"]`)?.value;
-    const stepType = stepTypeValue === "task_reminder" ? "task_reminder" : "email";
+    const stepType = stepTypeValue ? (stepTypeValue === "task_reminder" ? "task_reminder" : "email") : (step.stepType === "email" ? "email" : "task_reminder");
     const useContactEmail = document.querySelector(`[data-sequence-step-use-contact-email="${index}"]`)?.checked === true;
     const toFieldValue = document.querySelector(`[data-sequence-step-to="${index}"]`)?.value;
     const triggerImmediatelyAfterPrevious = index > 0 && document.querySelector(`[data-sequence-step-trigger-immediate="${index}"]`)?.checked === true;
     const parsedDelayDays = Number.parseInt(document.querySelector(`[data-sequence-step-delay="${index}"]`)?.value || step.delayDaysFromPrevious || 0, 10) || 0;
     return {
       ...step,
-      name: String(document.querySelector(`[data-sequence-step-name="${index}"]`)?.value || step.name || `Step ${index + 1}`),
-      delayDaysFromPrevious: index === 0 ? 0 : (triggerImmediatelyAfterPrevious ? 0 : Math.max(0, parsedDelayDays)),
+      name: String(document.querySelector(`[data-sequence-step-primary="${index}"]`)?.value || step.name || `Step ${index + 1}`),
+      delayDaysFromPrevious: index === 0 ? 0 : Math.max(0, parsedDelayDays),
       triggerImmediatelyAfterPrevious,
       useContactEmail,
       toEmail: String(toFieldValue !== undefined ? toFieldValue : (step.toEmail || "")),
       stepType,
       taskConfig: {
-        title: document.querySelector(`[data-sequence-step-task-title="${index}"]`)?.value || "",
+        title: document.querySelector(`[data-sequence-step-primary="${index}"]`)?.value || "",
         notes: document.querySelector(`[data-sequence-step-task-notes="${index}"]`)?.value || "",
       },
       templateConfig: {
@@ -4165,25 +4168,19 @@ function syncSequenceStepsFromForm(steps = []) {
   });
 }
 
-function buildSequenceStepMarkup(step, index) {
+function buildSequenceStepMarkup(step, index, expandedEmailStepId = "") {
   const template = normalizePromotionTemplateConfig(step.templateConfig || {});
-  const stepType = step.stepType === "task_reminder" ? "task_reminder" : "email";
-  const taskTitle = String(step?.taskConfig?.title || "");
+  const stepType = step.stepType === "email" ? "email" : "task_reminder";
   const taskNotes = String(step?.taskConfig?.notes || "");
-  return `<article class="panel detail-grid promotion-wizard-message-card"><p class="promotion-wizard-card-title"><strong>${escapeHtml(step.name || `Step ${index + 1}`)}</strong></p><label>Step Type<select data-sequence-step-type="${index}"><option value="email" ${stepType === "email" ? "selected" : ""}>Email</option><option value="task_reminder" ${stepType === "task_reminder" ? "selected" : ""}>Task Reminder</option></select></label><label>Step Name<input data-sequence-step-name="${index}" value="${escapeHtml(step.name || `Step ${index + 1}`)}" /></label>${index > 0 ? `<label class="sequence-offset-row"><span>Send this message</span><input class="promotion-wizard-offset-input" type="number" min="0" data-sequence-step-delay="${index}" value="${step.triggerImmediatelyAfterPrevious ? 0 : (Number(step.delayDaysFromPrevious) || 0)}" ${step.triggerImmediatelyAfterPrevious ? "disabled" : ""} /><span>days after the previous step.</span></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-trigger-immediate="${index}" ${step.triggerImmediatelyAfterPrevious ? "checked" : ""} /><span>Trigger immediately upon completion of the previous step</span></label>` : '<p>Step 1 sends at Start Date (or immediately if unset).</p>'}<div data-sequence-email-fields="${index}" class="${stepType === "task_reminder" ? "hidden" : ""}"><label>To<input type="email" data-sequence-step-to="${index}" value="${escapeHtml(step.toEmail || "")}" placeholder="person@example.com" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-use-contact-email="${index}" ${step.useContactEmail ? "checked" : ""} /><span>Use contact email for this step</span></label><label>Subject<input data-sequence-step-subject="${index}" value="${escapeHtml(template.subjectText)}" /></label><label>Intro<input data-sequence-step-intro="${index}" value="${escapeHtml(template.introText)}" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-populate-name="${index}" ${template.populateName ? "checked" : ""} /><span>Auto populate name</span></label><label>Body<textarea rows="4" data-sequence-step-body="${index}">${escapeHtml(template.bodyText)}</textarea></label><label>Outro<input data-sequence-step-outro="${index}" value="${escapeHtml(template.outroText)}" /></label></div><div data-sequence-task-fields="${index}" class="${stepType === "task_reminder" ? "" : "hidden"}"><label>Title<input data-sequence-step-task-title="${index}" value="${escapeHtml(taskTitle)}" /></label><label class="full-width">Description<textarea rows="4" data-sequence-step-task-notes="${index}">${escapeHtml(taskNotes)}</textarea></label></div></article>`;
+  const primaryValue = String(step?.taskConfig?.title || step?.name || "");
+  const expanded = expandedEmailStepId === step.id;
+  return `<article class="panel detail-grid promotion-wizard-message-card" draggable="true" data-sequence-step-card="${index}" data-sequence-step-id="${escapeHtml(step.id)}"><div class="sequence-step-card-header"><button type="button" class="secondary-btn" data-sequence-drag-handle="${index}" aria-label="Drag to reorder">↕</button><p class="promotion-wizard-card-title"><strong>Step ${index + 1}</strong></p></div><label>Step<input data-sequence-step-primary="${index}" value="${escapeHtml(primaryValue)}" placeholder="What needs to happen?" /></label>${index > 0 ? `<label class="template-checkbox-row"><input type="checkbox" data-sequence-step-trigger-immediate="${index}" ${step.triggerImmediatelyAfterPrevious ? "checked" : ""} /><span>Trigger immediately upon completion of the previous step</span></label><label class="sequence-offset-row"><span>Delay by</span><input class="promotion-wizard-offset-input" type="number" min="0" data-sequence-step-delay="${index}" value="${Number(step.delayDaysFromPrevious) || 0}" ${step.triggerImmediatelyAfterPrevious ? "disabled" : ""} /><span>days after previous step</span></label>` : '<p>Step 1 sends at Start Date (or immediately if unset).</p>'}<div class="button-row"><button type="button" class="secondary-btn" data-sequence-toggle-email="${escapeHtml(step.id)}">${expanded ? "Hide Email" : "Add Email"}</button></div><div data-sequence-email-fields="${index}" class="${expanded ? "" : "hidden"}"><label>Step Type<select data-sequence-step-type="${index}"><option value="task_reminder" ${stepType === "task_reminder" ? "selected" : ""}>Task Reminder</option><option value="email" ${stepType === "email" ? "selected" : ""}>Email</option></select></label><label>To<input type="email" data-sequence-step-to="${index}" value="${escapeHtml(step.toEmail || "")}" placeholder="person@example.com" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-use-contact-email="${index}" ${step.useContactEmail ? "checked" : ""} /><span>Use contact email for this step</span></label><label>Subject<input data-sequence-step-subject="${index}" value="${escapeHtml(template.subjectText)}" /></label><label>Intro<input data-sequence-step-intro="${index}" value="${escapeHtml(template.introText)}" /></label><label class="template-checkbox-row"><input type="checkbox" data-sequence-step-populate-name="${index}" ${template.populateName ? "checked" : ""} /><span>Auto populate name</span></label><label>Body<textarea rows="4" data-sequence-step-body="${index}">${escapeHtml(template.bodyText)}</textarea></label><label>Outro<input data-sequence-step-outro="${index}" value="${escapeHtml(template.outroText)}" /></label></div><div data-sequence-task-fields="${index}" class=""><label class="full-width">Description<textarea rows="3" data-sequence-step-task-notes="${index}">${escapeHtml(taskNotes)}</textarea></label></div></article>`;
 }
 
-function applySequenceStepTypeRules(index) {
-  const stepTypeSelect = document.querySelector(`[data-sequence-step-type="${index}"]`);
-  const emailFields = document.querySelector(`[data-sequence-email-fields="${index}"]`);
-  const taskFields = document.querySelector(`[data-sequence-task-fields="${index}"]`);
-  const stepType = stepTypeSelect?.value === "task_reminder" ? "task_reminder" : "email";
-  if (emailFields) emailFields.classList.toggle("hidden", stepType !== "email");
-  if (taskFields) taskFields.classList.toggle("hidden", stepType !== "task_reminder");
-}
+function applySequenceStepTypeRules() {}
 
 function applySequenceStepContactRules(step, index, selectedContact = null) {
-  const stepType = document.querySelector(`[data-sequence-step-type="${index}"]`)?.value || step.stepType || "email";
+  const stepType = document.querySelector(`[data-sequence-step-type="${index}"]`)?.value || step.stepType || "task_reminder";
   if (stepType !== "email") return;
   const toInput = document.querySelector(`[data-sequence-step-to="${index}"]`);
   const useContactCheckbox = document.querySelector(`[data-sequence-step-use-contact-email="${index}"]`);
@@ -4261,6 +4258,7 @@ async function renderSequenceCreateFlow() {
     bannerMessage: initialBannerMessage,
     isSavingTemplate: false,
     templateSaveError: "",
+    expandedEmailStepId: "",
   };
 
   const render = () => {
@@ -4359,7 +4357,7 @@ async function renderSequenceCreateFlow() {
       const selectedContact = contacts.find((entry) => entry.id === state.contactId) || null;
       const saveLabel = state.isSavingTemplate ? "Saving..." : "Save Template";
       const saveErrorMarkup = state.templateSaveError ? `<div class="panel"><p><strong>${escapeHtml(state.templateSaveError)}</strong></p></div>` : "";
-      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(state.editingTemplateId ? "Edit Template" : "Create Template")}</h2></div>${saveErrorMarkup}<div class="panel detail-grid"><label>Template Name<input id="sequence-name-input" value="${escapeHtml(state.sequenceName || state.selectedTemplate?.name || "")}" placeholder="Untitled Sequence" /></label></div><div class="promotion-wizard-message-list">${state.steps.map((step, index) => buildSequenceStepMarkup(step, index)).join("")}</div><div class="button-row"><button id="sequence-add-step-btn" type="button" class="secondary-btn" ${state.isSavingTemplate ? "disabled" : ""}>Add Sequence Step</button><button id="sequence-steps-prev-btn" type="button" class="secondary-btn" ${state.isSavingTemplate ? "disabled" : ""}>Back</button><button id="sequence-create-btn" type="button" ${state.isSavingTemplate ? "disabled" : ""}>${saveLabel}</button></div></section>`;
+      viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(state.editingTemplateId ? "Edit Template" : "Create Template")}</h2></div>${saveErrorMarkup}<div class="panel detail-grid"><label>Template Name<input id="sequence-name-input" value="${escapeHtml(state.sequenceName || state.selectedTemplate?.name || "")}" placeholder="Untitled Sequence" /></label></div><div class="promotion-wizard-message-list">${state.steps.map((step, index) => buildSequenceStepMarkup(step, index, state.expandedEmailStepId)).join("")}</div><div class="button-row"><button id="sequence-add-step-btn" type="button" class="secondary-btn" ${state.isSavingTemplate ? "disabled" : ""}>Add Sequence Step</button><button id="sequence-steps-prev-btn" type="button" class="secondary-btn" ${state.isSavingTemplate ? "disabled" : ""}>Back</button><button id="sequence-create-btn" type="button" ${state.isSavingTemplate ? "disabled" : ""}>${saveLabel}</button></div></section>`;
 
       state.steps.forEach((step, index) => {
         applySequenceStepTypeRules(index);
@@ -4371,25 +4369,64 @@ async function renderSequenceCreateFlow() {
         document.querySelector(`[data-sequence-step-use-contact-email="${index}"]`)?.addEventListener("change", () => {
           applySequenceStepContactRules(step, index, selectedContact);
         });
-        document.querySelector(`[data-sequence-step-trigger-immediate="${index}"]`)?.addEventListener("change", (event) => {
-          const delayInput = document.querySelector(`[data-sequence-step-delay="${index}"]`);
-          if (!delayInput) return;
-          if (event.target.checked === true) {
-            delayInput.value = "0";
-          }
-          delayInput.disabled = event.target.checked === true;
+      });
+
+      document.querySelectorAll("[data-sequence-toggle-email]").forEach((toggleEl) => {
+        toggleEl.addEventListener("click", () => {
+          state.steps = syncSequenceStepsFromForm(state.steps);
+          const stepId = String(toggleEl.getAttribute("data-sequence-toggle-email") || "");
+          state.expandedEmailStepId = state.expandedEmailStepId === stepId ? "" : stepId;
+          render();
         });
-        const immediateChecked = document.querySelector(`[data-sequence-step-trigger-immediate="${index}"]`)?.checked === true;
-        const delayInput = document.querySelector(`[data-sequence-step-delay="${index}"]`);
-        if (delayInput && immediateChecked) {
-          delayInput.value = "0";
-          delayInput.disabled = true;
-        }
+      });
+
+      const reorderSteps = (fromIndex, toIndex) => {
+        if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= state.steps.length || toIndex >= state.steps.length) return;
+        state.steps = syncSequenceStepsFromForm(state.steps);
+        const [moved] = state.steps.splice(fromIndex, 1);
+        state.steps.splice(toIndex, 0, moved);
+        render();
+      };
+
+      document.querySelectorAll("[data-sequence-step-card]").forEach((cardEl) => {
+        const fromIndex = Number.parseInt(cardEl.getAttribute("data-sequence-step-card") || "-1", 10);
+        cardEl.addEventListener("dragstart", (event) => {
+          event.dataTransfer?.setData("text/plain", String(fromIndex));
+          event.dataTransfer.effectAllowed = "move";
+        });
+        cardEl.addEventListener("dragover", (event) => {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+        });
+        cardEl.addEventListener("drop", (event) => {
+          event.preventDefault();
+          const draggedIndex = Number.parseInt(event.dataTransfer?.getData("text/plain") || "-1", 10);
+          reorderSteps(draggedIndex, fromIndex);
+        });
+        cardEl.addEventListener("touchmove", (event) => {
+          const touch = event.touches?.[0];
+          if (!touch) return;
+          cardEl.setAttribute("data-touch-dragging", "true");
+          const target = document.elementFromPoint(touch.clientX, touch.clientY)?.closest("[data-sequence-step-card]");
+          if (!target) return;
+          const draggedIndex = Number.parseInt(cardEl.getAttribute("data-sequence-step-card") || "-1", 10);
+          const targetIndex = Number.parseInt(target.getAttribute("data-sequence-step-card") || "-1", 10);
+          if (draggedIndex >= 0 && targetIndex >= 0 && draggedIndex !== targetIndex) {
+            reorderSteps(draggedIndex, targetIndex);
+          }
+        }, { passive: true });
       });
 
       document.getElementById("sequence-add-step-btn")?.addEventListener("click", () => {
         state.steps = syncSequenceStepsFromForm(state.steps);
-        state.steps.push(buildSequenceStepState({ name: `Step ${state.steps.length + 1}`, delayDaysFromPrevious: 1 }, state.steps.length));
+        state.expandedEmailStepId = "";
+        state.steps.push(buildSequenceStepState({
+          name: `Step ${state.steps.length + 1}`,
+          taskConfig: { title: "", notes: "" },
+          delayDaysFromPrevious: 0,
+          triggerImmediatelyAfterPrevious: true,
+          stepType: "task_reminder",
+        }, state.steps.length));
         render();
       });
       document.getElementById("sequence-steps-prev-btn")?.addEventListener("click", () => {
