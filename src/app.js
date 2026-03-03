@@ -4116,8 +4116,7 @@ function buildSequenceStepState(step = {}, index = 0) {
   const triggerImmediatelyAfterPrevious = index > 0
     ? (step.triggerImmediatelyAfterPrevious !== false)
     : false;
-  const hasEmailContent = Boolean(step.toEmail || step.useContactEmail || template.subjectText || template.introText || template.bodyText || template.outroText);
-  const stepType = step.stepType === "task_reminder" ? "task_reminder" : ((step.stepType === "email" || hasEmailContent) ? "email" : "task_reminder");
+  const stepType = resolveSequenceStepType(step, template);
   return {
     id: String(step.id || `step-${index + 1}`),
     order: index,
@@ -4136,6 +4135,26 @@ function buildSequenceStepState(step = {}, index = 0) {
       populateName: template.populateName === true && step.useContactEmail === true,
     },
   };
+}
+
+function resolveSequenceStepType(step = {}, template = null) {
+  const normalizedTemplate = template || normalizePromotionTemplateConfig(step.templateConfig || step.template || {});
+  const rawType = String(step?.stepType || step?.type || "").toLowerCase();
+  if (["task_reminder", "task", "reminder", "todo", "to_do"].includes(rawType)) {
+    return "task_reminder";
+  }
+  if (rawType === "email") {
+    return "email";
+  }
+  const hasEmailContent = Boolean(
+    step?.toEmail
+    || step?.useContactEmail
+    || normalizedTemplate.subjectText
+    || normalizedTemplate.introText
+    || normalizedTemplate.bodyText
+    || normalizedTemplate.outroText,
+  );
+  return hasEmailContent ? "email" : "task_reminder";
 }
 
 function syncSequenceStepsFromForm(steps = []) {
@@ -4239,7 +4258,7 @@ async function renderSequenceCreateFlow() {
     getDocs(query(collection(db, "users", currentUser.uid, "sequences"), orderBy("createdAt", "desc"))),
     getDocs(query(collection(db, "users", currentUser.uid, "contacts"), orderBy("name", "asc"))),
   ]);
-  const existing = sequencesSnapshot.docs
+  let templateLibraryEntries = sequencesSnapshot.docs
     .map((d) => ({ id: d.id, ...d.data() }))
     .filter((entry) => entry.isTemplate === true || entry.status === "template");
   const contacts = contactsSnapshot.docs.map((d) => ({ id: d.id, ...d.data() })).filter((c) => isActiveRecord(c));
@@ -4267,10 +4286,17 @@ async function renderSequenceCreateFlow() {
     expandedDetailStepIds: [],
   };
 
+  const refreshTemplateLibrary = async () => {
+    const refreshedSnapshot = await getDocs(query(collection(db, "users", currentUser.uid, "sequences"), orderBy("createdAt", "desc")));
+    templateLibraryEntries = refreshedSnapshot.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((entry) => entry.isTemplate === true || entry.status === "template");
+  };
+
   const render = () => {
     if (state.page === "select") {
-      const templateRows = existing.map((entry) => `<article class="panel feed-item"><h3>${escapeHtml(entry.name || "Untitled Sequence")}</h3><p>${Array.isArray(entry.steps) ? entry.steps.length : 0} steps</p><div class="button-row"><button type="button" class="secondary-btn danger-btn" data-delete-sequence-template="${entry.id}">Delete</button><button type="button" class="secondary-btn" data-edit-sequence-template="${entry.id}">Edit</button><button type="button" data-select-sequence-template="${entry.id}">Start</button></div></article>`).join("");
-      const options = existing.length
+      const templateRows = templateLibraryEntries.map((entry) => `<article class="panel feed-item"><h3>${escapeHtml(entry.name || "Untitled Sequence")}</h3><p>${Array.isArray(entry.steps) ? entry.steps.length : 0} steps</p><div class="button-row"><button type="button" class="secondary-btn danger-btn" data-delete-sequence-template="${entry.id}">Delete</button><button type="button" class="secondary-btn" data-edit-sequence-template="${entry.id}">Edit</button><button type="button" data-select-sequence-template="${entry.id}">Start</button></div></article>`).join("");
+      const options = templateLibraryEntries.length
         ? `<div class="feed-list">${templateRows}</div><div class="button-row"><button type="button" id="configure-sequence-btn">Create Template</button></div>`
         : '<div class="button-row"><button type="button" id="configure-sequence-btn">Create Template</button></div>';
       const bannerMarkup = state.bannerMessage ? `<div class="panel"><p><strong>${escapeHtml(state.bannerMessage)}</strong></p></div>` : "";
@@ -4294,7 +4320,7 @@ async function renderSequenceCreateFlow() {
       });
       document.querySelectorAll("[data-select-sequence-template]").forEach((buttonEl) => {
         buttonEl.addEventListener("click", () => {
-          const selected = existing.find((entry) => entry.id === buttonEl.dataset.selectSequenceTemplate);
+          const selected = templateLibraryEntries.find((entry) => entry.id === buttonEl.dataset.selectSequenceTemplate);
           state.selectedTemplate = selected || null;
           state.sourceTemplate = selected || null;
           state.sequenceName = selected?.name || "";
@@ -4308,7 +4334,7 @@ async function renderSequenceCreateFlow() {
       });
       document.querySelectorAll("[data-edit-sequence-template]").forEach((buttonEl) => {
         buttonEl.addEventListener("click", () => {
-          const selected = existing.find((entry) => entry.id === buttonEl.dataset.editSequenceTemplate);
+          const selected = templateLibraryEntries.find((entry) => entry.id === buttonEl.dataset.editSequenceTemplate);
           state.selectedTemplate = selected || null;
           state.sourceTemplate = selected || null;
           state.sequenceName = selected?.name || "";
@@ -4567,10 +4593,30 @@ async function renderSequenceCreateFlow() {
           steps: state.steps,
         };
         try {
-          await saveSequenceTemplate({ db, userId: currentUser.uid, sequence: payload, templateId: state.editingTemplateId || null });
+          const savedTemplateId = await saveSequenceTemplate({ db, userId: currentUser.uid, sequence: payload, templateId: state.editingTemplateId || null });
+          const savedTemplateSnapshot = await getDoc(doc(db, "users", currentUser.uid, "sequences", savedTemplateId));
+          if (savedTemplateSnapshot.exists()) {
+            const savedTemplate = { id: savedTemplateSnapshot.id, ...savedTemplateSnapshot.data() };
+            const existingIndex = templateLibraryEntries.findIndex((entry) => entry.id === savedTemplate.id);
+            if (existingIndex >= 0) {
+              templateLibraryEntries[existingIndex] = savedTemplate;
+            } else {
+              templateLibraryEntries.unshift(savedTemplate);
+            }
+          }
+          await refreshTemplateLibrary();
           const bannerMessage = state.editingTemplateId ? "Template updated. Select it to start." : "New sequence template saved. Select it to start.";
-          window.sessionStorage.setItem("sequence-template-banner", bannerMessage);
-          await renderSequenceCreateFlow();
+          state.bannerMessage = bannerMessage;
+          state.page = "select";
+          state.isSavingTemplate = false;
+          state.templateSaveError = "";
+          state.selectedTemplate = null;
+          state.sourceTemplate = null;
+          state.editingTemplateId = null;
+          state.expandedEmailStepId = "";
+          state.expandedDescriptionStepIds = [];
+          state.expandedDetailStepIds = [];
+          render();
           return;
         } catch (error) {
           console.error("Failed to save template", error);
@@ -4632,9 +4678,11 @@ async function renderSequenceEventDetail(eventId) {
         stepId: String(entry.stepId || canonicalStep?.id || ""),
         stepOrder: Number.isInteger(eventOrder) ? eventOrder : Number.MAX_SAFE_INTEGER,
         stepName: String(entry.stepName || canonicalStep?.name || `Step ${(Number.isInteger(eventOrder) ? eventOrder : 0) + 1}`),
-        stepType: entry.stepType === "task_reminder"
-          ? "task_reminder"
-          : (canonicalStep?.stepType === "task_reminder" ? "task_reminder" : "email"),
+        stepType: resolveSequenceStepType({
+          ...canonicalStep,
+          ...entry,
+          templateConfig: entry.templateConfig || entry.template || canonicalStep?.templateConfig || canonicalStep?.template || {},
+        }),
         toEmail: String(entry.toEmail || canonicalStep?.toEmail || ""),
         useContactEmail: entry.useContactEmail === true || canonicalStep?.useContactEmail === true,
         taskConfig: entry.taskConfig || canonicalStep?.taskConfig || { title: "", notes: "" },
@@ -4666,12 +4714,12 @@ async function renderSequenceEventDetail(eventId) {
 
   const next = events.find((entry) => entry.stepOrder > current.stepOrder && !entry.completed && entry.status !== "skipped");
   const completed = events.filter((entry) => entry.completed || entry.status === "skipped");
-  const stepType = current.stepType === "task_reminder" ? "task_reminder" : "email";
+  const stepType = resolveSequenceStepType(current);
   const templateConfig = normalizePromotionTemplateConfig(current.templateConfig || current.template || {});
   const currentRenderedTemplate = renderSequenceStepEmailTemplate(templateConfig, contact, current.useContactEmail === true);
   const mailPreview = currentRenderedTemplate.body.trim();
   const renderStepCard = (entry, withActions = false) => {
-    const entryType = entry.stepType === "task_reminder" ? "task_reminder" : "email";
+    const entryType = resolveSequenceStepType(entry);
     const cfg = normalizePromotionTemplateConfig(entry.templateConfig || entry.template || {});
     const renderedTemplate = renderSequenceStepEmailTemplate(cfg, contact, entry.useContactEmail === true);
     const body = renderedTemplate.body.trim();
