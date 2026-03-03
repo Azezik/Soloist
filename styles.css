@@ -1140,6 +1140,21 @@ select {
   margin: 0;
 }
 
+
+.sequence-section-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: fit-content;
+  font-size: 0.85rem;
+  opacity: 0.92;
+}
+
+.sequence-section-toggle:hover {
+  opacity: 1;
+}
+
 [data-sequence-drag-handle] {
   width: auto;
   min-height: 32px;
