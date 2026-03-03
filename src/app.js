@@ -4145,16 +4145,17 @@ function syncSequenceStepsFromForm(steps = []) {
     const toFieldValue = document.querySelector(`[data-sequence-step-to="${index}"]`)?.value;
     const triggerImmediatelyAfterPrevious = index > 0 && document.querySelector(`[data-sequence-step-trigger-immediate="${index}"]`)?.checked === true;
     const parsedDelayDays = Number.parseInt(document.querySelector(`[data-sequence-step-delay="${index}"]`)?.value || step.delayDaysFromPrevious || 0, 10) || 0;
+    const primaryFieldValue = String(document.querySelector(`[data-sequence-step-primary="${index}"]`)?.value || "");
     return {
       ...step,
-      name: String(document.querySelector(`[data-sequence-step-primary="${index}"]`)?.value || step.name || `Step ${index + 1}`),
+      name: primaryFieldValue,
       delayDaysFromPrevious: index === 0 ? 0 : Math.max(0, parsedDelayDays),
       triggerImmediatelyAfterPrevious,
       useContactEmail,
       toEmail: String(toFieldValue !== undefined ? toFieldValue : (step.toEmail || "")),
       stepType,
       taskConfig: {
-        title: document.querySelector(`[data-sequence-step-primary="${index}"]`)?.value || "",
+        title: primaryFieldValue,
         notes: document.querySelector(`[data-sequence-step-task-notes="${index}"]`)?.value || "",
       },
       templateConfig: {
@@ -4172,7 +4173,7 @@ function buildSequenceStepMarkup(step, index, expandedSections = {}) {
   const template = normalizePromotionTemplateConfig(step.templateConfig || {});
   const stepType = step.stepType === "email" ? "email" : "task_reminder";
   const taskNotes = String(step?.taskConfig?.notes || "");
-  const primaryValue = String(step?.taskConfig?.title || step?.name || "");
+  const primaryValue = String(step?.taskConfig?.title || "");
   const expandedEmail = expandedSections.emailStepId === step.id;
   const expandedDescription = Array.isArray(expandedSections.descriptionStepIds) && expandedSections.descriptionStepIds.includes(step.id);
   const expandedDetails = Array.isArray(expandedSections.detailStepIds) && expandedSections.detailStepIds.includes(step.id);
@@ -4373,6 +4374,19 @@ async function renderSequenceCreateFlow() {
         detailStepIds: state.expandedDetailStepIds,
       })).join("")}</div><div class="button-row"><button id="sequence-add-step-btn" type="button" class="secondary-btn" ${state.isSavingTemplate ? "disabled" : ""}>Add Step</button><button id="sequence-steps-prev-btn" type="button" class="secondary-btn" ${state.isSavingTemplate ? "disabled" : ""}>Back</button><button id="sequence-create-btn" type="button" ${state.isSavingTemplate ? "disabled" : ""}>${saveLabel}</button></div></section>`;
 
+      const syncSequenceNameFromForm = () => {
+        state.sequenceName = document.getElementById("sequence-name-input")?.value || state.sequenceName || "";
+      };
+
+      document.getElementById("sequence-name-input")?.addEventListener("input", () => {
+        syncSequenceNameFromForm();
+      });
+
+      const syncStepAndTemplateStateFromForm = () => {
+        syncSequenceNameFromForm();
+        state.steps = syncSequenceStepsFromForm(state.steps);
+      };
+
       state.steps.forEach((step, index) => {
         applySequenceStepTypeRules(index);
         applySequenceStepContactRules(step, index, selectedContact);
@@ -4387,7 +4401,7 @@ async function renderSequenceCreateFlow() {
 
       document.querySelectorAll("[data-sequence-toggle-description]").forEach((toggleEl) => {
         toggleEl.addEventListener("click", () => {
-          state.steps = syncSequenceStepsFromForm(state.steps);
+          syncStepAndTemplateStateFromForm();
           const stepId = String(toggleEl.getAttribute("data-sequence-toggle-description") || "");
           state.expandedDescriptionStepIds = state.expandedDescriptionStepIds.includes(stepId)
             ? state.expandedDescriptionStepIds.filter((entry) => entry !== stepId)
@@ -4398,7 +4412,7 @@ async function renderSequenceCreateFlow() {
 
       document.querySelectorAll("[data-sequence-toggle-email]").forEach((toggleEl) => {
         toggleEl.addEventListener("click", () => {
-          state.steps = syncSequenceStepsFromForm(state.steps);
+          syncStepAndTemplateStateFromForm();
           const stepId = String(toggleEl.getAttribute("data-sequence-toggle-email") || "");
           state.expandedEmailStepId = state.expandedEmailStepId === stepId ? "" : stepId;
           render();
@@ -4407,7 +4421,7 @@ async function renderSequenceCreateFlow() {
 
       document.querySelectorAll("[data-sequence-toggle-details]").forEach((toggleEl) => {
         toggleEl.addEventListener("click", () => {
-          state.steps = syncSequenceStepsFromForm(state.steps);
+          syncStepAndTemplateStateFromForm();
           const stepId = String(toggleEl.getAttribute("data-sequence-toggle-details") || "");
           state.expandedDetailStepIds = state.expandedDetailStepIds.includes(stepId)
             ? state.expandedDetailStepIds.filter((entry) => entry !== stepId)
@@ -4418,10 +4432,36 @@ async function renderSequenceCreateFlow() {
 
       const reorderSteps = (fromIndex, toIndex) => {
         if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= state.steps.length || toIndex >= state.steps.length) return;
-        state.steps = syncSequenceStepsFromForm(state.steps);
+        syncStepAndTemplateStateFromForm();
         const [moved] = state.steps.splice(fromIndex, 1);
         state.steps.splice(toIndex, 0, moved);
         render();
+      };
+
+      let touchDragState = null;
+      const clearTouchDragState = () => {
+        if (!touchDragState) return;
+        const activeCard = document.querySelector(`[data-sequence-step-card="${touchDragState.activeIndex}"]`);
+        if (activeCard) activeCard.removeAttribute("data-touch-dragging");
+        touchDragState = null;
+      };
+
+      const startTouchDrag = (fromIndex) => {
+        touchDragState = { activeIndex: fromIndex };
+        const activeCard = document.querySelector(`[data-sequence-step-card="${fromIndex}"]`);
+        if (activeCard) activeCard.setAttribute("data-touch-dragging", "true");
+      };
+
+      const handleTouchDragMove = (event) => {
+        if (!touchDragState) return;
+        const touch = event.touches?.[0];
+        if (!touch) return;
+        const target = document.elementFromPoint(touch.clientX, touch.clientY)?.closest("[data-sequence-step-card]");
+        if (!target) return;
+        const targetIndex = Number.parseInt(target.getAttribute("data-sequence-step-card") || "-1", 10);
+        if (targetIndex < 0 || targetIndex === touchDragState.activeIndex) return;
+        reorderSteps(touchDragState.activeIndex, targetIndex);
+        touchDragState.activeIndex = targetIndex;
       };
 
       document.querySelectorAll("[data-sequence-step-card]").forEach((cardEl) => {
@@ -4439,27 +4479,69 @@ async function renderSequenceCreateFlow() {
           const draggedIndex = Number.parseInt(event.dataTransfer?.getData("text/plain") || "-1", 10);
           reorderSteps(draggedIndex, fromIndex);
         });
-        cardEl.addEventListener("touchmove", (event) => {
-          const touch = event.touches?.[0];
-          if (!touch) return;
-          cardEl.setAttribute("data-touch-dragging", "true");
-          const target = document.elementFromPoint(touch.clientX, touch.clientY)?.closest("[data-sequence-step-card]");
-          if (!target) return;
-          const draggedIndex = Number.parseInt(cardEl.getAttribute("data-sequence-step-card") || "-1", 10);
-          const targetIndex = Number.parseInt(target.getAttribute("data-sequence-step-card") || "-1", 10);
-          if (draggedIndex >= 0 && targetIndex >= 0 && draggedIndex !== targetIndex) {
-            reorderSteps(draggedIndex, targetIndex);
-          }
+
+        const dragHandleEl = cardEl.querySelector("[data-sequence-drag-handle]");
+        let longPressTimer = null;
+
+        dragHandleEl?.addEventListener("touchstart", () => {
+          startTouchDrag(fromIndex);
         }, { passive: true });
+
+        dragHandleEl?.addEventListener("touchmove", (event) => {
+          if (!touchDragState) return;
+          event.preventDefault();
+          handleTouchDragMove(event);
+        }, { passive: false });
+
+        dragHandleEl?.addEventListener("touchend", () => {
+          clearTouchDragState();
+        });
+
+        dragHandleEl?.addEventListener("touchcancel", () => {
+          clearTouchDragState();
+        });
+
+        cardEl.addEventListener("touchstart", (event) => {
+          if (event.target.closest("input, textarea, select, button")) return;
+          longPressTimer = window.setTimeout(() => {
+            startTouchDrag(fromIndex);
+          }, 220);
+        }, { passive: true });
+
+        cardEl.addEventListener("touchmove", (event) => {
+          if (longPressTimer) {
+            window.clearTimeout(longPressTimer);
+            longPressTimer = null;
+          }
+          if (!touchDragState) return;
+          event.preventDefault();
+          handleTouchDragMove(event);
+        }, { passive: false });
+
+        cardEl.addEventListener("touchend", () => {
+          if (longPressTimer) {
+            window.clearTimeout(longPressTimer);
+            longPressTimer = null;
+          }
+          clearTouchDragState();
+        });
+
+        cardEl.addEventListener("touchcancel", () => {
+          if (longPressTimer) {
+            window.clearTimeout(longPressTimer);
+            longPressTimer = null;
+          }
+          clearTouchDragState();
+        });
       });
 
       document.getElementById("sequence-add-step-btn")?.addEventListener("click", () => {
-        state.steps = syncSequenceStepsFromForm(state.steps);
+        syncStepAndTemplateStateFromForm();
         state.expandedEmailStepId = "";
         state.expandedDescriptionStepIds = [];
         state.expandedDetailStepIds = [];
         state.steps.push(buildSequenceStepState({
-          name: `Step ${state.steps.length + 1}`,
+          name: "",
           taskConfig: { title: "", notes: "" },
           delayDaysFromPrevious: 0,
           triggerImmediatelyAfterPrevious: true,
@@ -4468,17 +4550,17 @@ async function renderSequenceCreateFlow() {
         render();
       });
       document.getElementById("sequence-steps-prev-btn")?.addEventListener("click", () => {
-        state.steps = syncSequenceStepsFromForm(state.steps);
+        syncStepAndTemplateStateFromForm();
         state.page = "select";
         render();
       });
       document.getElementById("sequence-create-btn")?.addEventListener("click", async () => {
         if (state.isSavingTemplate) return;
+        syncStepAndTemplateStateFromForm();
         state.templateSaveError = "";
         state.isSavingTemplate = true;
         render();
-        state.sequenceName = document.getElementById("sequence-name-input")?.value || state.sequenceName || "";
-        state.steps = syncSequenceStepsFromForm(state.steps).map((entry, index) => ({ ...entry, order: index, name: entry.name || `Step ${index + 1}` }));
+        state.steps = state.steps.map((entry, index) => ({ ...entry, order: index, name: entry.name || `Step ${index + 1}` }));
         const payload = {
           name: state.sequenceName || state.selectedTemplate?.name || "Untitled Sequence",
           steps: state.steps,
