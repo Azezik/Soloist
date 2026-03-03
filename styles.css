@@ -1160,10 +1160,15 @@ select {
   min-height: 32px;
   padding: 0.25rem 0.6rem;
   cursor: grab;
+  touch-action: none;
 }
 
 .promotion-wizard-message-card[draggable="true"] {
   touch-action: pan-y;
+}
+
+.promotion-wizard-message-card[data-touch-dragging="true"] {
+  opacity: 0.85;
 }
 
 .promotion-wizard-message-list {
