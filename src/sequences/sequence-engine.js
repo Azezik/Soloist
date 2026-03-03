@@ -20,7 +20,13 @@ function normalizeSequenceSteps(rawSteps = []) {
       const order = Number.isInteger(step?.order) ? step.order : index;
       const delayDays = Number.parseInt(step?.delayDaysFromPrevious, 10);
       const templateConfig = normalizePromotionTemplateConfig(step?.templateConfig || step?.template || {});
-      const stepType = step?.stepType === "task_reminder" ? "task_reminder" : "email";
+      const hasTaskPayload = Boolean(
+        String(step?.taskConfig?.title || step?.taskTitle || "").trim()
+        || String(step?.taskConfig?.notes || step?.taskNotes || "").trim(),
+      );
+      const stepType = step?.stepType === "task_reminder"
+        ? "task_reminder"
+        : (step?.stepType === "email" ? "email" : (hasTaskPayload ? "task_reminder" : "email"));
       const taskConfig = {
         title: clampString(step?.taskConfig?.title || step?.taskTitle || "", 500),
         notes: clampString(step?.taskConfig?.notes || step?.taskNotes || "", 5000),
@@ -139,10 +145,10 @@ export async function createSequence({ db, userId, sequence, contactId = null, d
 
   for (let index = 0; index < steps.length; index += 1) {
     const step = steps[index];
-    const previousStep = index > 0 ? steps[index - 1] : null;
-    const isLockedUntilPreviousComplete = index > 0 && previousStep?.triggerImmediatelyAfterPrevious === true;
+    const isFirstStep = index === 0;
     const scheduledForDate = scheduledDates[index] || new Date();
-    const scheduledFor = isLockedUntilPreviousComplete ? null : Timestamp.fromDate(scheduledForDate);
+    const scheduledFor = isFirstStep ? Timestamp.fromDate(scheduledForDate) : null;
+    const initialStatus = isFirstStep ? "active" : "queued";
     const eventId = `sequence_${sequenceRef.id}_step_${step.id}`;
     await setDoc(doc(db, "users", userId, "events", eventId), {
       type: "sequence_step",
@@ -164,11 +170,11 @@ export async function createSequence({ db, userId, sequence, contactId = null, d
       summary: clampString(`${sequenceDisplayName} · ${step.name || `Step ${step.order + 1}`}`, 5000),
       scheduledFor,
       nextActionAt: scheduledFor,
-      blockedUntilPreviousComplete: isLockedUntilPreviousComplete,
+      blockedUntilPreviousComplete: !isFirstStep,
       completed: false,
       archived: false,
       deleted: false,
-      status: "open",
+      status: initialStatus,
       contactId: contactId || null,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -182,7 +188,7 @@ export async function createSequence({ db, userId, sequence, contactId = null, d
     }, { merge: true });
 
     await setDoc(doc(db, "users", userId, "sequences", sequenceRef.id, "steps", step.id, "statuses", "single"), {
-      status: "open",
+      status: initialStatus,
       completed: false,
       skipped: false,
       updatedAt: serverTimestamp(),
@@ -268,7 +274,7 @@ export async function markSequenceStepStatus({ db, userId, event, status }) {
     updatedAt: now,
   }, { merge: true });
 
-  if (status !== "completed") return;
+  if (status !== "completed" && status !== "skipped") return;
 
   const sequenceSnapshot = await getDoc(doc(db, "users", userId, "sequences", event.sequenceId));
   const sequence = sequenceSnapshot.exists() ? sequenceSnapshot.data() : null;
@@ -276,16 +282,25 @@ export async function markSequenceStepStatus({ db, userId, event, status }) {
   const currentIndex = orderedSteps.findIndex((entry) => entry.id === event.stepId);
   if (currentIndex < 0 || currentIndex >= orderedSteps.length - 1) return;
   const nextStep = orderedSteps[currentIndex + 1];
-  if (nextStep?.triggerImmediatelyAfterPrevious !== true) return;
-
   const nextEventId = `sequence_${event.sequenceId}_step_${nextStep.id}`;
-  const nowTimestamp = Timestamp.now();
+  const nowDate = new Date();
+  const activationDate = new Date(nowDate);
+  if (nextStep?.triggerImmediatelyAfterPrevious !== true) {
+    activationDate.setDate(activationDate.getDate() + Math.max(0, Number(nextStep?.delayDaysFromPrevious) || 0));
+  }
+  const activationTimestamp = Timestamp.fromDate(activationDate);
   await updateDoc(doc(db, "users", userId, "events", nextEventId), {
-    scheduledFor: nowTimestamp,
-    nextActionAt: nowTimestamp,
+    status: "active",
+    scheduledFor: activationTimestamp,
+    nextActionAt: activationTimestamp,
     blockedUntilPreviousComplete: false,
     updatedAt: serverTimestamp(),
   });
+
+  await setDoc(doc(db, "users", userId, "sequences", event.sequenceId, "steps", nextStep.id, "statuses", "single"), {
+    status: "active",
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
 }
 
 export async function truncateSequenceInstanceFromStep({ db, userId, event }) {

@@ -1047,6 +1047,7 @@ async function renderDashboard() {
     const isPromotionEvent = event.type === "promotion" || event.type === "promotion_touchpoint" || Boolean(event.promotionId);
     const isSequenceEvent = event.type === "sequence_step" && Boolean(event.sequenceId) && Boolean(event.stepId);
     if (!isActiveRecord(event) || (!isPromotionEvent && !isSequenceEvent)) return null;
+    if (isSequenceEvent && event.status !== "active") return null;
     const contact = event.contactId ? contactById[event.contactId] : null;
     const isContainer = event.type === "promotion_touchpoint" || !event.leadId;
     const isSequence = isSequenceEvent;
@@ -1812,7 +1813,7 @@ async function renderTasksPage() {
 
   const getSequenceSortTime = (entry) => toDate(entry.scheduledFor || entry.nextActionAt)?.getTime() || 0;
   const activeSequenceSteps = allSequenceSteps
-    .filter((entry) => !entry.completed && entry.status !== "skipped")
+    .filter((entry) => !entry.completed && entry.status === "active")
     .sort((a, b) => getSequenceSortTime(b) - getSequenceSortTime(a));
   const completedSequenceSteps = allSequenceSteps
     .filter((entry) => entry.completed || entry.status === "skipped")
@@ -1832,7 +1833,7 @@ async function renderTasksPage() {
 
   const renderSequenceCard = (entry) => {
     const linkedContact = entry.contactId ? contactById[entry.contactId] : null;
-    const statusText = entry.status === "skipped" ? "Completed" : (entry.completed ? "Completed" : "Active");
+    const statusText = entry.status === "skipped" ? "Completed" : (entry.completed ? "Completed" : (entry.status === "queued" ? "Queued" : "Active"));
     return `
       <button class="panel feed-item feed-item--sequence" data-sequence-event-id="${entry.id}" type="button">
         <h3>${escapeHtml(entry.title || entry.name || entry.stepName || "Sequence Step")}</h3>
@@ -4146,9 +4147,16 @@ function resolveSequenceStepType(step = {}, template = null) {
   if (rawType === "email") {
     return "email";
   }
+  const hasTaskPayload = Boolean(
+    String(step?.taskConfig?.title || step?.taskTitle || "").trim()
+    || String(step?.taskConfig?.notes || step?.taskNotes || "").trim(),
+  );
+  if (hasTaskPayload) {
+    return "task_reminder";
+  }
   const hasEmailContent = Boolean(
-    step?.toEmail
-    || step?.useContactEmail
+    String(step?.toEmail || "").trim()
+    || step?.useContactEmail === true
     || normalizedTemplate.subjectText
     || normalizedTemplate.introText
     || normalizedTemplate.bodyText
@@ -4714,10 +4722,22 @@ async function renderSequenceEventDetail(eventId) {
 
   const next = events.find((entry) => entry.stepOrder > current.stepOrder && !entry.completed && entry.status !== "skipped");
   const completed = events.filter((entry) => entry.completed || entry.status === "skipped");
+  const hasEmailPayload = (entry) => {
+    const cfg = normalizePromotionTemplateConfig(entry?.templateConfig || entry?.template || {});
+    return Boolean(
+      String(entry?.toEmail || "").trim()
+      || entry?.useContactEmail === true
+      || cfg.subjectText
+      || cfg.introText
+      || cfg.bodyText
+      || cfg.outroText,
+    );
+  };
   const stepType = resolveSequenceStepType(current);
   const templateConfig = normalizePromotionTemplateConfig(current.templateConfig || current.template || {});
   const currentRenderedTemplate = renderSequenceStepEmailTemplate(templateConfig, contact, current.useContactEmail === true);
   const mailPreview = currentRenderedTemplate.body.trim();
+  const shouldShowEmailPreview = stepType === "email" && hasEmailPayload(current);
   const renderStepCard = (entry, withActions = false) => {
     const entryType = resolveSequenceStepType(entry);
     const cfg = normalizePromotionTemplateConfig(entry.templateConfig || entry.template || {});
@@ -4725,7 +4745,7 @@ async function renderSequenceEventDetail(eventId) {
     const body = renderedTemplate.body.trim();
     const subject = renderedTemplate.subject.trim();
     const to = String(entry.useContactEmail ? (contact?.email || "") : (entry.toEmail || "")).trim();
-    const stateLabel = entry.status === "skipped" ? "Skipped" : entry.completed ? "Done" : "Open";
+    const stateLabel = entry.status === "skipped" ? "Skipped" : entry.completed ? "Done" : (entry.status === "queued" ? "Queued" : "Active");
     const actionMarkup = withActions
       ? `<div class="promo-touchpoint-lead-actions">${entryType === "email" ? `<div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-open-mail="${entry.id}" ${to ? `data-mail-to="${escapeHtml(to)}"` : "disabled"} data-mail-subject="${escapeHtml(subject)}" data-mail-body="${escapeHtml(body)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(body)}">Copy</button></div><div class="promo-touchpoint-action-divider" aria-hidden="true"></div>` : ""}<div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-step-done="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-sequence-step-skip="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Skip</button></div></div>`
       : "";
@@ -4736,9 +4756,9 @@ async function renderSequenceEventDetail(eventId) {
     return `<article class="promo-touchpoint-lead-card panel panel--sequence ${entry.completed || entry.status === "skipped" ? "promo-touchpoint-lead-card--completed" : ""}"><div class="promo-touchpoint-lead-meta"><p class="promo-touchpoint-lead-name">${escapeHtml(entry.stepName || "Step")}</p><p class="promo-touchpoint-lead-detail">Scheduled for ${escapeHtml(formatDate(entry.scheduledFor))}</p><p class="promo-touchpoint-lead-status">Status: ${escapeHtml(stateLabel)}</p></div>${reminderContent}${actionMarkup}</article>`;
   };
 
-  const previewMarkup = stepType === "task_reminder"
-    ? ""
-    : `<label class="full-width">Template Preview<textarea rows="5" readonly>${escapeHtml(mailPreview)}</textarea></label>`;
+  const previewMarkup = shouldShowEmailPreview
+    ? `<label class="full-width">Template Preview<textarea rows="5" readonly>${escapeHtml(mailPreview)}</textarea></label>`
+    : "";
 
   const sequenceDisplayName = composeSequenceDisplayName(sequence);
   const sequenceProgressIndex = Math.max(0, events.findIndex((entry) => entry.id === current.id));
@@ -4768,7 +4788,7 @@ async function renderSequenceEventDetail(eventId) {
     phone: contact?.phone || "",
     originRoute,
   });
-  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div>${sequenceProgressMarkup}<div class="panel panel--sequence stage-status-card feed-item--sequence">${sequenceContactSubCardMarkup}<div class="stage-status-card__meta"><p><strong>Viewing Stage:</strong> ${escapeHtml(current.stepName || "Step")} <span class="stage-state-pill stage-state-pill--${sequenceStageViewState}">${escapeHtml(sequenceStageLabel)}</span></p><p><strong>Current Stage:</strong> ${escapeHtml(events[activeSequenceIndex]?.stepName || "-")}</p><p><strong>Status:</strong> ${escapeHtml(current.status || (current.completed ? "completed" : "open"))}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Viewing</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, sequenceStageViewState === "active")}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
+  viewContainer.innerHTML = `<section class="crm-view crm-view--promotions"><div class="view-header"><h2>${escapeHtml(sequenceDisplayName || "Sequence")}</h2><div class="view-header-actions"><button id="back-dashboard-btn" type="button" class="secondary-btn">Back</button><button id="edit-sequence-step-btn" type="button">Edit</button></div></div>${sequenceProgressMarkup}<div class="panel panel--sequence stage-status-card feed-item--sequence">${sequenceContactSubCardMarkup}<div class="stage-status-card__meta"><p><strong>Viewing Stage:</strong> ${escapeHtml(current.stepName || "Step")} <span class="stage-state-pill stage-state-pill--${sequenceStageViewState}">${escapeHtml(sequenceStageLabel)}</span></p><p><strong>Current Stage:</strong> ${escapeHtml(events[activeSequenceIndex]?.stepName || "-")}</p><p><strong>Status:</strong> ${escapeHtml(current.status || (current.completed ? "completed" : "active"))}</p><p><strong>Due:</strong> ${formatDate(current.scheduledFor)}</p></div></div><div class="panel panel--lead notes-panel">${previewMarkup}<div class="promo-touchpoint-leads-wrap"><div class="promo-touchpoint-lead-section"><h3>Viewing</h3><div class="promo-touchpoint-lead-list">${renderStepCard(current, sequenceStageViewState === "active")}</div></div><div class="promo-touchpoint-lead-section"><h3>Up Next</h3><div class="promo-touchpoint-lead-list">${next ? renderStepCard(next, false) : '<p class="view-message">No next step.</p>'}</div></div><div class="promo-touchpoint-lead-section promo-touchpoint-lead-section--completed"><h3>Completed</h3><div class="promo-touchpoint-lead-list">${completed.length ? completed.map((entry) => renderStepCard(entry, false)).join("") : '<p class="view-message">No completed steps yet.</p>'}</div></div></div></div></section>`;
 
   document.getElementById("back-dashboard-btn")?.addEventListener("click", () => {
     dismissExpandedView(originRoute, "#dashboard");
