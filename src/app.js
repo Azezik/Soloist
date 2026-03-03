@@ -4165,6 +4165,32 @@ function resolveSequenceStepType(step = {}, template = null) {
   return hasEmailContent ? "email" : "task_reminder";
 }
 
+function readRawSequenceTemplateConfig(templateInput = {}) {
+  return {
+    subjectText: String(templateInput?.subjectText ?? templateInput?.subject ?? "").trim(),
+    introText: String(templateInput?.introText ?? templateInput?.opening ?? "").trim(),
+    bodyText: String(templateInput?.bodyText ?? templateInput?.body ?? "").trim(),
+    outroText: String(templateInput?.outroText ?? templateInput?.closing ?? "").trim(),
+  };
+}
+
+function hasMeaningfulSequenceEmailContent(step = {}) {
+  const template = readRawSequenceTemplateConfig(step?.templateConfig || step?.template || {});
+  const hasSubjectOrBody = Boolean(template.subjectText || template.bodyText);
+  const hasCustomIntro = Boolean(template.introText && template.introText.toLowerCase() !== "hi [name],");
+  const hasCustomOutro = Boolean(template.outroText && template.outroText.toLowerCase() !== "best,");
+  return hasSubjectOrBody || hasCustomIntro || hasCustomOutro;
+}
+
+function isSequenceEmailStep(step = {}) {
+  const rawType = String(step?.stepType || step?.type || "").toLowerCase();
+  const explicitEmailEnabled = step?.hasEmail === true
+    || step?.emailEnabled === true
+    || step?.email?.enabled === true
+    || rawType === "email";
+  return explicitEmailEnabled && hasMeaningfulSequenceEmailContent(step);
+}
+
 function syncSequenceStepsFromForm(steps = []) {
   return steps.map((step, index) => {
     const stepTypeValue = document.querySelector(`[data-sequence-step-type="${index}"]`)?.value;
@@ -4722,22 +4748,10 @@ async function renderSequenceEventDetail(eventId) {
 
   const next = events.find((entry) => entry.stepOrder > current.stepOrder && !entry.completed && entry.status !== "skipped");
   const completed = events.filter((entry) => entry.completed || entry.status === "skipped");
-  const hasEmailPayload = (entry) => {
-    const cfg = normalizePromotionTemplateConfig(entry?.templateConfig || entry?.template || {});
-    return Boolean(
-      String(entry?.toEmail || "").trim()
-      || entry?.useContactEmail === true
-      || cfg.subjectText
-      || cfg.introText
-      || cfg.bodyText
-      || cfg.outroText,
-    );
-  };
-  const stepType = resolveSequenceStepType(current);
   const templateConfig = normalizePromotionTemplateConfig(current.templateConfig || current.template || {});
   const currentRenderedTemplate = renderSequenceStepEmailTemplate(templateConfig, contact, current.useContactEmail === true);
   const mailPreview = currentRenderedTemplate.body.trim();
-  const shouldShowEmailPreview = stepType === "email" && hasEmailPayload(current);
+  const shouldShowEmailPreview = isSequenceEmailStep(current);
   const renderStepCard = (entry, withActions = false) => {
     const entryType = resolveSequenceStepType(entry);
     const cfg = normalizePromotionTemplateConfig(entry.templateConfig || entry.template || {});
@@ -4745,9 +4759,10 @@ async function renderSequenceEventDetail(eventId) {
     const body = renderedTemplate.body.trim();
     const subject = renderedTemplate.subject.trim();
     const to = String(entry.useContactEmail ? (contact?.email || "") : (entry.toEmail || "")).trim();
+    const showEmailActions = isSequenceEmailStep(entry);
     const stateLabel = entry.status === "skipped" ? "Skipped" : entry.completed ? "Done" : (entry.status === "queued" ? "Queued" : "Active");
     const actionMarkup = withActions
-      ? `<div class="promo-touchpoint-lead-actions">${entryType === "email" ? `<div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-open-mail="${entry.id}" ${to ? `data-mail-to="${escapeHtml(to)}"` : "disabled"} data-mail-subject="${escapeHtml(subject)}" data-mail-body="${escapeHtml(body)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(body)}">Copy</button></div><div class="promo-touchpoint-action-divider" aria-hidden="true"></div>` : ""}<div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-step-done="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-sequence-step-skip="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Skip</button></div></div>`
+      ? `<div class="promo-touchpoint-lead-actions">${showEmailActions ? `<div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-open-mail="${entry.id}" ${to ? `data-mail-to="${escapeHtml(to)}"` : "disabled"} data-mail-subject="${escapeHtml(subject)}" data-mail-body="${escapeHtml(body)}">Open Mail</button><button type="button" class="secondary-btn" data-copy-text="${escapeHtml(body)}">Copy</button></div><div class="promo-touchpoint-action-divider" aria-hidden="true"></div>` : ""}<div class="promo-touchpoint-action-group"><button type="button" class="secondary-btn" data-sequence-step-done="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Done</button><button type="button" class="secondary-btn" data-sequence-step-skip="${entry.id}" ${entry.completed || entry.status === "skipped" ? "disabled" : ""}>Skip</button></div></div>`
       : "";
     const descriptionText = String(entry?.taskConfig?.notes || entry?.taskNotes || "").trim();
     const reminderContent = entryType === "task_reminder"
