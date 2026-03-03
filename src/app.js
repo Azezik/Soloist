@@ -1045,10 +1045,10 @@ async function renderDashboard() {
   const duePromotions = promoEventsSnapshot.docs.map((eventDoc) => {
     const event = { id: eventDoc.id, ...eventDoc.data() };
     const isPromotionEvent = event.type === "promotion" || event.type === "promotion_touchpoint" || Boolean(event.promotionId);
-    const isSequenceEvent = event.type === "sequence" || event.type === "sequence_step" || Boolean(event.sequenceId);
+    const isSequenceEvent = event.type === "sequence_step" && Boolean(event.sequenceId) && Boolean(event.stepId);
     if (!isActiveRecord(event) || (!isPromotionEvent && !isSequenceEvent)) return null;
     const contact = event.contactId ? contactById[event.contactId] : null;
-    const isContainer = event.type === "promotion_touchpoint" || event.type === "sequence_step" || !event.leadId;
+    const isContainer = event.type === "promotion_touchpoint" || !event.leadId;
     const isSequence = isSequenceEvent;
     return {
       type: isSequence ? "sequence" : "promotion",
@@ -1790,7 +1790,7 @@ async function renderTasksPage() {
     .filter((task) => isActiveRecord(task));
   const allSequenceSteps = sequenceEventsSnapshot.docs
     .map((eventDoc) => ({ id: eventDoc.id, ...eventDoc.data() }))
-    .filter((event) => isActiveRecord(event) && (event.type === "sequence" || event.type === "sequence_step" || Boolean(event.sequenceId)));
+    .filter((event) => isActiveRecord(event) && event.type === "sequence_step" && event.sequenceId && event.stepId);
 
 
   const getTaskLastSavedTime = (task) =>
@@ -2823,6 +2823,7 @@ async function markSequenceEventDone(eventId) {
   const refreshed = await getDocs(query(collection(db, "users", currentUser.uid, "events"), where("sequenceId", "==", event.sequenceId)));
   const unresolved = refreshed.docs.some((docItem) => {
     const value = docItem.data() || {};
+    if (value.type !== "sequence_step" || !value.stepId) return false;
     return value.completed !== true && value.status !== "skipped";
   });
   if (!unresolved) {
@@ -4569,9 +4570,8 @@ async function renderSequenceCreateFlow() {
           await saveSequenceTemplate({ db, userId: currentUser.uid, sequence: payload, templateId: state.editingTemplateId || null });
           const bannerMessage = state.editingTemplateId ? "Template updated. Select it to start." : "New sequence template saved. Select it to start.";
           window.sessionStorage.setItem("sequence-template-banner", bannerMessage);
-          state.page = "select";
-          state.isSavingTemplate = false;
-          render();
+          await renderSequenceCreateFlow();
+          return;
         } catch (error) {
           console.error("Failed to save template", error);
           state.templateSaveError = "Unable to save template. Please try again.";
@@ -4612,9 +4612,47 @@ async function renderSequenceEventDetail(eventId) {
     return;
   }
   const sequence = { id: sequenceSnapshot.id, ...sequenceSnapshot.data() };
-  const events = eventsSnapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })).filter((entry) => isActiveRecord(entry)).sort((a, b) => (Number(a.stepOrder) || 0) - (Number(b.stepOrder) || 0));
+  const sequenceSteps = (Array.isArray(sequence.steps) ? sequence.steps : [])
+    .map((step, index) => ({
+      ...step,
+      id: String(step?.id || `step-${index + 1}`),
+      order: Number.isInteger(step?.order) ? step.order : index,
+    }))
+    .sort((a, b) => a.order - b.order);
+  const sequenceStepById = new Map(sequenceSteps.map((step, index) => [step.id, { ...step, order: index }]));
+  const events = eventsSnapshot.docs
+    .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+    .filter((entry) => isActiveRecord(entry) && entry.type === "sequence_step" && entry.stepId)
+    .map((entry) => {
+      const canonicalStep = sequenceStepById.get(String(entry.stepId || "")) || null;
+      const canonicalOrder = canonicalStep ? canonicalStep.order : null;
+      const eventOrder = Number.isInteger(entry.stepOrder) ? entry.stepOrder : canonicalOrder;
+      return {
+        ...entry,
+        stepId: String(entry.stepId || canonicalStep?.id || ""),
+        stepOrder: Number.isInteger(eventOrder) ? eventOrder : Number.MAX_SAFE_INTEGER,
+        stepName: String(entry.stepName || canonicalStep?.name || `Step ${(Number.isInteger(eventOrder) ? eventOrder : 0) + 1}`),
+        stepType: entry.stepType === "task_reminder"
+          ? "task_reminder"
+          : (canonicalStep?.stepType === "task_reminder" ? "task_reminder" : "email"),
+        toEmail: String(entry.toEmail || canonicalStep?.toEmail || ""),
+        useContactEmail: entry.useContactEmail === true || canonicalStep?.useContactEmail === true,
+        taskConfig: entry.taskConfig || canonicalStep?.taskConfig || { title: "", notes: "" },
+        taskTitle: entry.taskTitle || canonicalStep?.taskTitle || canonicalStep?.taskConfig?.title || "",
+        taskNotes: entry.taskNotes || canonicalStep?.taskNotes || canonicalStep?.taskConfig?.notes || "",
+        templateConfig: entry.templateConfig || entry.template || canonicalStep?.templateConfig || canonicalStep?.template || {},
+      };
+    })
+    .sort((a, b) => a.stepOrder - b.stepOrder);
 
-  const current = events.find((entry) => entry.id === eventId) || event;
+  if (!events.length) {
+    viewContainer.innerHTML = '<p class="view-message">Sequence steps not found.</p>';
+    return;
+  }
+
+  const current = events.find((entry) => entry.id === eventId)
+    || events.find((entry) => entry.stepId === event.stepId)
+    || events[0];
   const resolvedSequenceContactId = [
     sequence.contactId,
     current.contactId,
@@ -4626,7 +4664,7 @@ async function renderSequenceEventDetail(eventId) {
     : null;
   const contact = contactSnapshot?.exists() ? { id: contactSnapshot.id, ...contactSnapshot.data() } : null;
 
-  const next = events.find((entry) => (Number(entry.stepOrder) || 0) > (Number(current.stepOrder) || 0) && !entry.completed && entry.status !== "skipped");
+  const next = events.find((entry) => entry.stepOrder > current.stepOrder && !entry.completed && entry.status !== "skipped");
   const completed = events.filter((entry) => entry.completed || entry.status === "skipped");
   const stepType = current.stepType === "task_reminder" ? "task_reminder" : "email";
   const templateConfig = normalizePromotionTemplateConfig(current.templateConfig || current.template || {});
@@ -4711,6 +4749,7 @@ async function renderSequenceEventDetail(eventId) {
     const refreshed = await getDocs(query(collection(db, "users", currentUser.uid, "events"), where("sequenceId", "==", event.sequenceId)));
     const unresolved = refreshed.docs.some((docItem) => {
       const value = docItem.data() || {};
+      if (value.type !== "sequence_step" || !value.stepId) return false;
       return value.completed !== true && value.status !== "skipped";
     });
     if (!unresolved) {
